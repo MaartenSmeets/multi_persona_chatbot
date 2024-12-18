@@ -102,12 +102,15 @@ async def generate_character_message(character_name: str):
 
     try:
         interaction = await asyncio.to_thread(llm_client.generate, prompt=prompt)
-        bot_message = interaction.dialogue if interaction else "No response."
+        if interaction:
+            formatted_message = f"*{interaction.action}*\n{interaction.dialogue}"
+        else:
+            formatted_message = "No response."
     except Exception as e:
-        bot_message = f"Error: {str(e)}"
+        formatted_message = f"Error: {str(e)}"
 
     # Replace placeholder message with final response
-    chat_manager.chat_history[-1]["message"] = bot_message
+    chat_manager.chat_history[-1]["message"] = formatted_message
     update_chat_display()
 
 
