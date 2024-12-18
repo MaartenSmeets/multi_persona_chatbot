@@ -14,7 +14,7 @@ def get_default_prompt_template() -> str:
     ### Latest Dialogue ###
     {latest_dialogue}
 
-    ### Instructions for the Language Model ###
+    ### Instructions ###
 
     You are to respond as {name}, a character deeply immersed in the conversation's context. Your responses must:
 
@@ -49,8 +49,10 @@ class Character(BaseModel):
 
     def format_prompt(self, setting: str, chat_history_summary: str, latest_dialogue: str) -> str:
         """Format the prompt template with given variables."""
+        
         return self.prompt_template.format(
             setting=setting,
             chat_history_summary=chat_history_summary,
-            latest_dialogue=latest_dialogue
+            latest_dialogue=latest_dialogue,
+            name=self.name
         )
