@@ -40,7 +40,8 @@ class OllamaClient:
         self,
         prompt: str,
         max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None
+        temperature: Optional[float] = None,
+        system: Optional[str] = None
     ) -> Optional[BaseModel]:
         model_name = self.config.get('model_name')
 
@@ -70,6 +71,9 @@ class OllamaClient:
                 'temperature': temperature if temperature is not None else self.config.get('temperature', 0.7)
             }
         }
+
+        if system:
+            payload['system'] = system
 
         if self.output_model:
             # If model output format needed

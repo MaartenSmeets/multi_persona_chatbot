@@ -150,7 +150,6 @@ async def add_character_from_dropdown(event):
         char = ALL_CHARACTERS.get(char_name, None)
         if char:
             if char_name in chat_manager.get_character_names():
-                # Previously would add system message; now do nothing special
                 pass
             else:
                 chat_manager.add_character(char_name, char)
@@ -186,12 +185,11 @@ async def next_character_response():
         update_next_speaker_label()
 
 async def generate_character_introduction_message(character_name: str):
-    # Build a prompt specifically for introduction
-    prompt = chat_manager.build_prompt_for_character(character_name)
-    prompt += "\n\nYou have just arrived in the conversation. As your first message, introduce yourself by describing your appearance, what can be perceived about you, and how you act, based on the conversation setting and your character's established background."
+    (system_prompt, user_prompt) = chat_manager.build_prompt_for_character(character_name)
+    user_prompt += "\n\nYou have just arrived in the conversation. As your first message, introduce yourself by describing your appearance, what can be perceived about you, and how you act, based on the conversation setting and your character's established background."
 
     try:
-        interaction = await asyncio.to_thread(llm_client.generate, prompt=prompt)
+        interaction = await asyncio.to_thread(llm_client.generate, prompt=user_prompt, system=system_prompt)
         if interaction and isinstance(interaction, Interaction):
             formatted_message = f"*{interaction.action}*\n{interaction.dialogue}"
         elif interaction:
@@ -205,10 +203,10 @@ async def generate_character_introduction_message(character_name: str):
     update_chat_display()
 
 async def generate_character_message(character_name: str):
-    prompt = chat_manager.build_prompt_for_character(character_name)
+    (system_prompt, user_prompt) = chat_manager.build_prompt_for_character(character_name)
 
     try:
-        interaction = await asyncio.to_thread(llm_client.generate, prompt=prompt)
+        interaction = await asyncio.to_thread(llm_client.generate, prompt=user_prompt, system=system_prompt)
         if interaction and isinstance(interaction, Interaction):
             formatted_message = f"*{interaction.action}*\n{interaction.dialogue}"
         elif interaction:
@@ -283,7 +281,6 @@ def main_page():
         # Add Characters Dropdown (async on_change)
         with ui.row().classes('w-full items-center mb-4'):
             ui.label("Select Character:").classes('w-1/4')
-            # Make add_character_from_dropdown async
             character_dropdown = ui.select(
                 options=list(ALL_CHARACTERS.keys()),
                 on_change=lambda e: asyncio.create_task(add_character_from_dropdown(e)),

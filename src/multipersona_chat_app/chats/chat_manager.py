@@ -56,12 +56,10 @@ class ChatManager:
         # Initialize summary if not exists
         if not self.db.get_summary(self.session_id, char_name):
             self.db.save_summary(self.session_id, char_name, "")
-        # No system message; introduction will be handled externally.
 
     def remove_character(self, char_name: str):
         if char_name in self.characters:
             del self.characters[char_name]
-        # No system message
 
     def next_speaker(self) -> Optional[str]:
         chars = self.get_character_names()
@@ -75,7 +73,7 @@ class ChatManager:
             self.turn_index = (self.turn_index + 1) % len(chars)
 
     def add_message(self, sender: str, message: str, visible: bool = True, message_type: str = "user"):
-        # Ignore system messages and thinking ("...") messages. Do not store or display them.
+        # Ignore system messages and thinking ("...") messages.
         if message_type == "system" or message.strip() == "...":
             return
         self.db.save_message(self.session_id, sender, message, visible, message_type)
@@ -85,20 +83,21 @@ class ChatManager:
         msgs = self.db.get_messages(self.session_id)
         return [(m["sender"], m["message"], m["message_type"]) for m in msgs if m["visible"]]
 
-    def build_prompt_for_character(self, character_name: str) -> str:
+    def build_prompt_for_character(self, character_name: str) -> Tuple[str, str]:
         visible_history = self.get_visible_history()
-        # Exclude system messages and ... messages are never stored, so no filtering needed here.
         latest_dialogue = visible_history[-1][1] if visible_history else ""
         chat_history_summary = self.db.get_summary(self.session_id, character_name)
         setting = self.current_setting
 
         char = self.characters[character_name]
-        prompt = char.format_prompt(
+        user_prompt = char.format_prompt(
             setting=setting,
             chat_history_summary=chat_history_summary,
             latest_dialogue=latest_dialogue
         )
-        return prompt
+        # Include the system prompt template from the character
+        system_prompt = char.system_prompt_template
+        return (system_prompt, user_prompt)
 
     def start_automatic_chat(self):
         self.automatic_running = True
@@ -114,7 +113,6 @@ class ChatManager:
 
     def summarize_history_for_character(self, character_name: str):
         msgs = self.db.get_messages(self.session_id)
-        # relevant_msgs exclude system (not stored anymore) and ... (not stored)
         relevant_msgs = [(m["sender"], m["message"]) for m in msgs if m["visible"] and m["message_type"] != "system"]
         previous_summary = self.db.get_summary(self.session_id, character_name)
 
