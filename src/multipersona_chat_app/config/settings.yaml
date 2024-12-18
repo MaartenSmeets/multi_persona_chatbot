@@ -1,0 +1,7 @@
+# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/config/settings.yaml
+- name: "Default Setting"
+  description: "A standard conversation environment."
+- name: "Intimate Setting"
+  description: "A more personal, close and private setting."
+- name: "Formal Setting"
+  description: "A professional and respectful environment."

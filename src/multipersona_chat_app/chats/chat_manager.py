@@ -1,7 +1,8 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/chats/chat_manager.py
 import datetime
 from typing import List, Dict, Tuple, Optional
 from models.character import Character
+import yaml
+import os
 
 class ChatManager:
     def __init__(self, you_name: str = "You"):
@@ -10,6 +11,28 @@ class ChatManager:
         self.turn_index = 0
         self.automatic_running = False
         self.you_name = you_name
+        self.current_setting = "This is a shared conversation environment."
+        self.character_summaries: Dict[str, str] = {}
+
+        config_path = os.path.join("src", "multipersona_chat_app", "config", "chat_manager_config.yaml")
+        self.config = self.load_config(config_path)
+        self.max_dialogue_length_before_summarization = self.config.get('max_dialogue_length_before_summarization', 10)
+
+    @staticmethod
+    def load_config(config_path: str) -> dict:
+        try:
+            with open(config_path, 'r') as file:
+                config = yaml.safe_load(file)
+            return config
+        except FileNotFoundError:
+            return {}
+        except yaml.YAMLError:
+            return {}
+        except:
+            return {}
+
+    def set_current_setting(self, setting_description: str):
+        self.current_setting = setting_description
 
     def get_character_names(self) -> List[str]:
         return self.get_characters_in_order()
@@ -19,10 +42,13 @@ class ChatManager:
 
     def add_character(self, char_name: str, char_instance: Character):
         self.characters[char_name] = char_instance
+        self.character_summaries[char_name] = ""
 
     def remove_character(self, char_name: str):
         if char_name in self.characters:
             del self.characters[char_name]
+        if char_name in self.character_summaries:
+            del self.character_summaries[char_name]
 
     def get_characters_in_order(self) -> List[str]:
         return list(self.characters.keys())
@@ -45,6 +71,7 @@ class ChatManager:
             "timestamp": datetime.datetime.now(),
             "visible": visible
         })
+        self.check_summarization()
 
     def get_visible_history(self) -> List[Tuple[str, str]]:
         return [(entry["sender"], entry["message"]) for entry in self.chat_history if entry["visible"]]
@@ -52,8 +79,8 @@ class ChatManager:
     def build_prompt_for_character(self, character_name: str) -> str:
         visible_history = self.get_visible_history()
         latest_dialogue = visible_history[-1][1] if visible_history else ""
-        setting = "This is a shared conversation environment."
-        chat_history_summary = "\n".join(f"{s}: {m}" for s, m in visible_history[:-1])
+        chat_history_summary = self.character_summaries.get(character_name, "")
+        setting = self.current_setting
 
         char = self.characters[character_name]
         prompt = char.format_prompt(
@@ -68,3 +95,43 @@ class ChatManager:
 
     def stop_automatic_chat(self):
         self.automatic_running = False
+
+    def check_summarization(self):
+        visible_history = self.get_visible_history()
+        if len(visible_history) > self.max_dialogue_length_before_summarization:
+            for char_name in self.characters:
+                self.summarize_history_for_character(char_name)
+
+    def summarize_history_for_character(self, character_name: str):
+        visible_history = self.get_visible_history()
+        previous_summary = self.character_summaries.get(character_name, "")
+
+        history_text = "\n".join(f"{s}: {m}" for s, m in visible_history)
+        prompt = f"""
+You are summarizing a conversation from the perspective of {character_name}. 
+Focus only on what {character_name} knows, their feelings, their perceptions, and actions they observed.
+If there is a previous summary, integrate it into the new summary.
+
+Previous Summary:
+{previous_summary}
+
+New Events to Summarize:
+{history_text}
+
+Instructions:
+- Provide a concise, high-quality summary that contains the most important information from {character_name}'s perspective.
+- Include actions perceived by {character_name}, their own thoughts and feelings, and relevant conversation points.
+- Do not include information about others' internal states unless {character_name} has perceived it.
+- Keep it short and informative.
+"""
+
+        from llm.ollama_client import OllamaClient
+        summarize_llm = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml')
+        new_summary = summarize_llm.generate(prompt=prompt)
+        if not new_summary:
+            new_summary = previous_summary
+
+        self.character_summaries[character_name] = new_summary
+
+        # Clear the chat history now that it is summarized
+        self.chat_history = []

@@ -1,4 +1,3 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/ui/app.py
 import os
 from nicegui import ui, app
 from llm.ollama_client import OllamaClient
@@ -6,8 +5,8 @@ from models.interaction import Interaction
 from models.character import Character
 from chats.chat_manager import ChatManager
 import asyncio
+import yaml
 
-# Initialize LLM client and ChatManager
 llm_client = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml', output_model=Interaction)
 chat_manager = ChatManager(you_name="You")
 
@@ -18,13 +17,22 @@ character_dropdown = None
 added_characters_container = None  
 next_speaker_label = None
 next_button = None
+settings_dropdown = None
 
 CHARACTERS_DIR = "src/multipersona_chat_app/characters"
-ALL_CHARACTERS = {}  # Will hold {character_name: Character object}
+ALL_CHARACTERS = {}
+ALL_SETTINGS = []
 
+def load_settings():
+    settings_path = os.path.join("src", "multipersona_chat_app", "config", "settings.yaml")
+    try:
+        with open(settings_path, 'r') as f:
+            data = yaml.safe_load(f)
+            return data if isinstance(data, list) else []
+    except:
+        return []
 
 def get_available_characters(directory):
-    """Retrieve available characters as a dictionary {char_name: Character object}."""
     characters = {}
     try:
         for filename in os.listdir(directory):
@@ -40,7 +48,6 @@ def get_available_characters(directory):
     return characters
 
 def refresh_added_characters():
-    """Refresh the list of added characters in the UI."""
     added_characters_container.clear()
     for char_name in chat_manager.get_character_names():
         with added_characters_container:
@@ -59,10 +66,10 @@ def update_next_speaker_label():
         next_speaker_label.text = "No characters available."
 
 def main_page():
-    global user_input, chat_display, you_name_input, character_dropdown, added_characters_container, next_speaker_label, next_button, ALL_CHARACTERS
+    global user_input, chat_display, you_name_input, character_dropdown, added_characters_container, next_speaker_label, next_button, ALL_CHARACTERS, ALL_SETTINGS, settings_dropdown
 
-    # Load all characters once
     ALL_CHARACTERS = get_available_characters(CHARACTERS_DIR)
+    ALL_SETTINGS = load_settings()
 
     with ui.column().classes('w-full max-w-2xl mx-auto'):
         ui.label('Multipersona Chat Application').classes('text-2xl font-bold mb-4')
@@ -72,6 +79,15 @@ def main_page():
             ui.label("Your name:").classes('w-1/4')
             you_name_input = ui.input(value=chat_manager.you_name).classes('flex-grow')
             ui.button("Set", on_click=lambda: set_you_name(you_name_input.value)).classes('ml-2')
+
+        # Select Setting
+        with ui.row().classes('w-full items-center mb-4'):
+            ui.label("Select Setting:").classes('w-1/4')
+            settings_dropdown = ui.select(
+                options=[s['name'] for s in ALL_SETTINGS],
+                on_change=select_setting,
+                label="Choose a setting"
+            ).classes('flex-grow')
 
         # Add Characters Dropdown
         with ui.row().classes('w-full items-center mb-4'):
@@ -110,8 +126,14 @@ def main_page():
             user_input = ui.input(placeholder='Enter your message...').classes('flex-grow')
             ui.button('Send', on_click=lambda: asyncio.create_task(send_user_message())).classes('ml-2')
 
-    # Schedule the Background Task for Automatic Conversation
     app.on_startup(lambda: asyncio.create_task(automatic_conversation()))
+
+def select_setting(event):
+    chosen_name = event.value
+    for s in ALL_SETTINGS:
+        if s['name'] == chosen_name:
+            chat_manager.set_current_setting(s['description'])
+            break
 
 def toggle_automatic_chat(e):
     if e.value:
@@ -145,7 +167,7 @@ def add_character_from_dropdown(event):
 
         update_chat_display()
         update_next_speaker_label()
-        character_dropdown.value = None  # Reset dropdown selection
+        character_dropdown.value = None
 
 def remove_character(name: str):
     chat_manager.remove_character(name)
@@ -155,7 +177,6 @@ def remove_character(name: str):
     update_next_speaker_label()
 
 async def automatic_conversation():
-    """Continuous loop to facilitate automatic character turns."""
     while True:
         await asyncio.sleep(2)
         if chat_manager.automatic_running:
@@ -166,7 +187,6 @@ async def automatic_conversation():
                 update_next_speaker_label()
 
 async def next_character_response():
-    """Manually trigger next character response if not in automatic mode."""
     if chat_manager.automatic_running:
         return
     next_char = chat_manager.next_speaker()
@@ -190,8 +210,9 @@ async def generate_character_message(character_name: str):
     except Exception as e:
         formatted_message = f"Error: {str(e)}"
 
-    # Replace placeholder message with final response
-    chat_manager.chat_history[-1]["message"] = formatted_message
+    # Safety check to avoid IndexError if chat_history was cleared by summarization
+    if chat_manager.chat_history:
+        chat_manager.chat_history[-1]["message"] = formatted_message
     update_chat_display()
 
 async def send_user_message():
@@ -203,7 +224,6 @@ async def send_user_message():
     user_input.value = ''
     user_input.update()
 
-    # If not running automatically, let user press "Next" manually or continue as desired
     if not chat_manager.automatic_running:
         update_next_speaker_label()
 
