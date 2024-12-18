@@ -11,6 +11,9 @@ class ChatManager:
         self.automatic_running = False
         self.you_name = you_name
 
+    def get_character_names(self) -> List[str]:
+        return self.get_characters_in_order()
+
     def set_you_name(self, name: str):
         self.you_name = name
 
