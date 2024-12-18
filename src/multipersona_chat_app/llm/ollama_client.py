@@ -1,31 +1,26 @@
-# ollama_client.py
+# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/llm/ollama_client.py
 import requests
 import logging
 from typing import Optional, Type
 from pydantic import BaseModel
 import yaml
-import json  # Needed for parsing streaming JSON lines
+import json
+import os
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+from db.cache_manager import CacheManager
+
 logger = logging.getLogger(__name__)
 
 class OllamaClient:
     def __init__(self, config_path: str, output_model: Optional[Type[BaseModel]] = None):
-        """
-        Initialize the OllamaClient with a configuration file.
-        """
         self.config = self.load_config(config_path)
         self.output_model = output_model
+        # Initialize cache
+        cache_file = os.path.join("output", "llm_cache")
+        self.cache_manager = CacheManager(cache_file)
 
     @staticmethod
     def load_config(config_path: str) -> dict:
-        """
-        Load the YAML configuration file and return it as a dictionary.
-        """
         try:
             with open(config_path, 'r') as file:
                 config = yaml.safe_load(file)
@@ -47,10 +42,19 @@ class OllamaClient:
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None
     ) -> Optional[BaseModel]:
-        """
-        Generate a response from the model based on the given prompt.
-        Implements retry logic based on the configuration and supports streaming responses.
-        """
+        model_name = self.config.get('model_name')
+
+        # Check cache first
+        cached_response = self.cache_manager.get_cached_response(prompt, model_name)
+        if cached_response is not None:
+            logger.info("Returning cached LLM response.")
+            if self.output_model:
+                try:
+                    return self.output_model.parse_raw(cached_response)
+                except:
+                    return cached_response
+            return cached_response
+
         headers = {
             'Content-Type': 'application/json',
         }
@@ -59,23 +63,20 @@ class OllamaClient:
             headers['Authorization'] = f'Bearer {api_key}'
 
         payload = {
-            'model': self.config.get('model_name'),
+            'model': model_name,
             'prompt': prompt,
-            "stream": True,  # Ensuring we request a streaming response
-            'options': {         
+            "stream": True,
+            'options': {
                 'temperature': temperature if temperature is not None else self.config.get('temperature', 0.7)
             }
         }
 
         if self.output_model:
-            # The specifics of how the model is formatted might vary.
-            # If your API supports specifying a format, use that here.
-            # Otherwise, consider removing or adjusting this line as needed.
+            # If model output format needed
             payload['format'] = self.output_model.model_json_schema()
 
         max_retries = self.config.get('max_retries', 3)
 
-        # Prepare headers for logging by masking the Authorization header
         log_headers = headers.copy()
         if 'Authorization' in log_headers:
             log_headers['Authorization'] = 'Bearer ***'
@@ -93,44 +94,35 @@ class OllamaClient:
                     json=payload,
                     stream=True
                 ) as response:
-                    # Log response status and headers
                     logger.info(f"Received response with status code: {response.status_code}")
                     logger.info(f"Response Headers: {response.headers}")
-
                     response.raise_for_status()
 
                     output = ""
                     for line in response.iter_lines(decode_unicode=True):
                         if not line:
                             continue
-                        # Log the raw response line before parsing
                         logger.debug(f"Raw response line: {line}")
 
                         try:
                             data = json.loads(line)
-                            #logger.info(f"Parsed response line: {data}")
                         except json.JSONDecodeError:
                             logger.warning("Received a line that could not be JSON-decoded, skipping...")
                             continue
 
-                        # Check for errors in streaming data
                         if "error" in data:
                             logger.error(f"Error in response data: {data['error']}")
                             raise Exception(data["error"])
 
-                        # Extract the 'response' field
                         content = data.get("response", "")
                         output += content
 
                         if data.get("done", False):
-                            # Streaming is complete
-                            # Parse into output_model if provided
+                            # Cache the result
+                            self.cache_manager.store_response(prompt, model_name, output)
+
                             if self.output_model:
                                 try:
-                                    # Validate that output contains valid JSON
-                                    if not output.strip():
-                                        raise ValueError("Output is empty, cannot parse.")
-                                    
                                     parsed_output = self.output_model.parse_raw(output)
                                     logger.info(f"Final parsed output: {parsed_output}")
                                     return parsed_output
@@ -140,7 +132,6 @@ class OllamaClient:
                             logger.info(f"Final output: {output}")
                             return output
 
-                    # If we exit the loop without hitting 'done', something might be wrong
                     logger.error("No 'done' signal received before the stream ended.")
                     return None
             except requests.exceptions.RequestException as e:

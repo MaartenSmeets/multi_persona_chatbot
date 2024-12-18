@@ -26,6 +26,7 @@ share/python-wheels/
 *.egg
 MANIFEST
 concatenated_python_files.py
+output/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
