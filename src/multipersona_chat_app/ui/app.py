@@ -22,7 +22,8 @@ next_speaker_label = None
 next_button = None
 settings_dropdown = None
 session_dropdown = None
-chat_display = None  # Ensure it's accessible globally
+chat_display = None
+auto_timer = None  # We'll use a timer for automatic chatting
 
 CHARACTERS_DIR = "src/multipersona_chat_app/characters"
 ALL_CHARACTERS = {}
@@ -156,6 +157,7 @@ def select_setting(event):
 
 def toggle_automatic_chat(e):
     """Toggle the automatic chat feature on or off."""
+    global auto_timer
     if e.value:
         if not chat_manager.get_character_names():
             chat_manager.add_message("System", "No characters added. Please add characters to start automatic chat.", visible=True, message_type="system")
@@ -163,8 +165,10 @@ def toggle_automatic_chat(e):
             e.value = False
             return
         chat_manager.start_automatic_chat()
+        auto_timer.active = True
     else:
         chat_manager.stop_automatic_chat()
+        auto_timer.active = False
     next_button.enabled = not chat_manager.automatic_running
     next_button.update()
 
@@ -195,15 +199,13 @@ def show_chat_display():
             ui.markdown(formatted_message)
 
 async def automatic_conversation():
-    """Handle automatic conversation between characters."""
-    while True:
-        await asyncio.sleep(2)
-        if chat_manager.automatic_running:
-            next_char = chat_manager.next_speaker()
-            if next_char:
-                await generate_character_message(next_char)
-                chat_manager.advance_turn()
-                update_next_speaker_label()
+    """Check if automatic conversation should advance the dialogue."""
+    if chat_manager.automatic_running:
+        next_char = chat_manager.next_speaker()
+        if next_char:
+            await generate_character_message(next_char)
+            chat_manager.advance_turn()
+            update_next_speaker_label()
 
 async def next_character_response():
     """Generate the next character's response manually."""
@@ -224,12 +226,15 @@ async def generate_character_introduction_message(character_name: str):
         interaction = await run.io_bound(llm_client.generate, prompt=user_prompt, system=system_prompt)
         if isinstance(interaction, Interaction):
             formatted_message = f"*{interaction.action}*\n{interaction.dialogue}"
+            # Store affect and purpose as well
+            chat_manager.add_message(character_name, formatted_message, visible=True, message_type="character", affect=interaction.affect, purpose=interaction.purpose)
         else:
             formatted_message = str(interaction) if interaction else "No introduction."
+            chat_manager.add_message(character_name, formatted_message, visible=True, message_type="character")
     except Exception as e:
         formatted_message = f"Error generating introduction: {str(e)}"
+        chat_manager.add_message(character_name, formatted_message, visible=True, message_type="character")
 
-    chat_manager.add_message(character_name, formatted_message, visible=True, message_type="character")
     show_chat_display.refresh()
 
 async def generate_character_message(character_name: str):
@@ -240,12 +245,15 @@ async def generate_character_message(character_name: str):
         interaction = await run.io_bound(llm_client.generate, prompt=user_prompt, system=system_prompt)
         if isinstance(interaction, Interaction):
             formatted_message = f"*{interaction.action}*\n{interaction.dialogue}"
+            # Store affect and purpose
+            chat_manager.add_message(character_name, formatted_message, visible=True, message_type="character", affect=interaction.affect, purpose=interaction.purpose)
         else:
             formatted_message = str(interaction) if interaction else "No response."
+            chat_manager.add_message(character_name, formatted_message, visible=True, message_type="character")
     except Exception as e:
         formatted_message = f"Error: {str(e)}"
+        chat_manager.add_message(character_name, formatted_message, visible=True, message_type="character")
 
-    chat_manager.add_message(character_name, formatted_message, visible=True, message_type="character")
     show_chat_display.refresh()
 
 async def send_user_message():
@@ -385,8 +393,9 @@ def start_ui():
 
     main_page()
 
-    # Start the background automatic conversation task
-    app.on_startup(lambda: asyncio.create_task(automatic_conversation()))
+    # Use a ui.timer to periodically trigger automatic conversation
+    global auto_timer
+    auto_timer = ui.timer(interval=2.0, callback=lambda: asyncio.create_task(automatic_conversation()), active=False)
 
     ui.run(reload=False)
 
