@@ -2,6 +2,7 @@ from typing import List, Dict, Tuple, Optional
 from models.character import Character
 import os
 import logging
+import threading  # Added for threading
 
 from db.db_manager import DBManager
 from llm.ollama_client import OllamaClient
@@ -87,8 +88,8 @@ class ChatManager:
             return
         self.db.save_message(self.session_id, sender, message, visible, message_type, affect=affect, purpose=purpose)
         self.check_summarization()
-        # After every message, check if we need to update the setting
-        self.maybe_update_setting(sender, message)
+        # After every message, check if we need to update the setting asynchronously
+        threading.Thread(target=self.maybe_update_setting, args=(sender, message), daemon=True).start()
 
     def get_visible_history(self) -> List[Tuple[str, str, str, Optional[str], int]]:
         msgs = self.db.get_messages(self.session_id)
@@ -187,8 +188,8 @@ Instructions:
         Determine if the setting should be updated based on the latest message.
         Uses the LLM to propose changes to the setting if necessary.
         """
-
-        prompt = f"""
+        try:
+            prompt = f"""
 Current Setting:
 {self.current_setting}
 
@@ -201,14 +202,17 @@ If no update is needed, simply repeat the current setting verbatim.
 Ensure the updated setting retains important context from the original but adds or modifies details relevant to the change.
 """
 
-        llm = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml')
-        updated_setting = llm.generate(prompt=prompt)
-        if updated_setting and isinstance(updated_setting, str):
-            updated_setting = updated_setting.strip()
-            # If the setting changed, update it in the database and in memory
-            if updated_setting != self.current_setting:
-                self.current_setting = updated_setting
-                self.db.update_current_setting(self.session_id, self.current_setting)
+            llm = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml')
+            updated_setting = llm.generate(prompt=prompt)
+            if updated_setting and isinstance(updated_setting, str):
+                updated_setting = updated_setting.strip()
+                # If the setting changed, update it in the database and in memory
+                if updated_setting != self.current_setting:
+                    self.current_setting = updated_setting
+                    self.db.update_current_setting(self.session_id, self.current_setting)
+                    logger.info(f"Updated setting to: {self.current_setting}")
+        except Exception as e:
+            logger.error(f"Error in maybe_update_setting: {e}")
 
     def get_session_name(self) -> str:
         """

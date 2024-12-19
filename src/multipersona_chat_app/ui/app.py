@@ -4,11 +4,22 @@ import asyncio
 import yaml
 from datetime import datetime
 from nicegui import ui, app, run
-
+import logging
 from llm.ollama_client import OllamaClient
 from models.interaction import Interaction
 from models.character import Character
 from chats.chat_manager import ChatManager
+
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("app.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # Initialize global variables
 llm_client = None
@@ -33,16 +44,23 @@ DB_PATH = os.path.join("output", "conversations.db")
 def load_settings():
     """Load settings from the YAML configuration file."""
     settings_path = os.path.join("src", "multipersona_chat_app", "config", "settings.yaml")
+    logger.debug(f"Loading settings from {settings_path}")
     try:
         with open(settings_path, 'r') as f:
             data = yaml.safe_load(f)
-            return data if isinstance(data, list) else []
+            if isinstance(data, list):
+                logger.info("Settings loaded successfully.")
+                return data
+            else:
+                logger.warning("Settings file does not contain a list. Returning empty list.")
+                return []
     except Exception as e:
-        print(f"Error loading settings: {e}")
+        logger.error(f"Error loading settings: {e}")
         return []
 
 def get_available_characters(directory):
     """Retrieve all available characters from the specified directory."""
+    logger.debug(f"Retrieving available characters from directory: {directory}")
     characters = {}
     try:
         for filename in os.listdir(directory):
@@ -51,20 +69,27 @@ def get_available_characters(directory):
                 try:
                     char = Character.from_yaml(yaml_path)
                     characters[char.name] = char
+                    logger.info(f"Loaded character: {char.name}")
                 except Exception as e:
-                    print(f"Error loading character from {yaml_path}: {e}")
+                    logger.error(f"Error loading character from {yaml_path}: {e}")
     except FileNotFoundError:
-        print(f"Characters directory '{directory}' not found.")
+        logger.error(f"Characters directory '{directory}' not found.")
     return characters
 
 def init_chat_manager(session_id: str):
     """Initialize the ChatManager and LLM client with the given session ID."""
     global chat_manager, llm_client
+    logger.debug(f"Initializing ChatManager with session_id: {session_id}")
     chat_manager = ChatManager(you_name="You", session_id=session_id)
-    llm_client = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml', output_model=Interaction)
+    try:
+        llm_client = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml', output_model=Interaction)
+        logger.info("LLM Client initialized successfully.")
+    except Exception as e:
+        logger.error(f"Error initializing LLM Client: {e}")
 
 def refresh_added_characters():
     """Refresh the UI component that displays added characters."""
+    logger.debug("Refreshing added characters in UI.")
     if added_characters_container is not None:
         added_characters_container.clear()
         for char_name in chat_manager.get_character_names():
@@ -75,67 +100,88 @@ def refresh_added_characters():
                         'Remove',
                         on_click=lambda _, name=char_name: remove_character(name),
                     ).classes('ml-2 bg-red-500 text-white')
+        logger.info("Added characters refreshed in UI.")
     else:
-        print("Error: added_characters_container is not initialized.")
+        logger.error("added_characters_container is not initialized.")
 
 def update_next_speaker_label():
     """Update the label that shows who the next speaker is."""
     ns = chat_manager.next_speaker()
     if ns:
         next_speaker_label.text = f"Next speaker: {ns}"
+        logger.debug(f"Next speaker updated to: {ns}")
     else:
         next_speaker_label.text = "No characters available."
+        logger.debug("No next speaker available.")
     next_speaker_label.update()
 
 def populate_session_dropdown():
     """Populate the session dropdown with available sessions and select the current one."""
+    logger.debug("Populating session dropdown.")
     sessions = chat_manager.db.get_all_sessions()
     session_names = [s['name'] for s in sessions]
     session_dropdown.options = session_names
     current = [s for s in sessions if s['session_id'] == chat_manager.session_id]
     if current:
         session_dropdown.value = current[0]['name']
+        logger.info(f"Session dropdown set to current session: {current[0]['name']}")
     else:
         session_dropdown.value = None  # No session selected
+        logger.info("No current session selected in dropdown.")
 
 def on_session_select(event):
     """Handle the event when a session is selected from the dropdown."""
     selected_name = event.value
+    logger.info(f"Session selected: {selected_name}")
     sessions = chat_manager.db.get_all_sessions()
     for s in sessions:
         if s['name'] == selected_name:
             load_session(s['session_id'])
+            logger.debug(f"Loaded session with ID: {s['session_id']}")
             return
+    logger.warning(f"Selected session name '{selected_name}' not found.")
 
 def create_new_session(_):
     """Create a new session and load it."""
     new_id = str(uuid.uuid4())
-    chat_manager.db.create_session(new_id, f"Session {new_id}")
+    session_name = f"Session {new_id}"
+    logger.info(f"Creating new session: {session_name} with ID: {new_id}")
+    chat_manager.db.create_session(new_id, session_name)
     load_session(new_id)
 
 def delete_session(_):
     """Delete the selected session and handle UI updates."""
+    logger.info("Attempting to delete selected session.")
     sessions = chat_manager.db.get_all_sessions()
     if session_dropdown.value:
         to_delete = [s for s in sessions if s['name'] == session_dropdown.value]
         if to_delete:
             sid = to_delete[0]['session_id']
+            logger.info(f"Deleting session: {to_delete[0]['name']} with ID: {sid}")
             chat_manager.db.delete_session(sid)
             # If the current session is deleted, create and load a new one
             if sid == chat_manager.session_id:
                 remaining_sessions = chat_manager.db.get_all_sessions()
                 if remaining_sessions:
                     new_session = remaining_sessions[0]
+                    logger.info(f"Loading remaining session: {new_session['name']} with ID: {new_session['session_id']}")
                     load_session(new_session['session_id'])
                 else:
                     new_id = str(uuid.uuid4())
-                    chat_manager.db.create_session(new_id, f"Session {new_id}")
+                    new_session_name = f"Session {new_id}"
+                    chat_manager.db.create_session(new_id, new_session_name)
+                    logger.info(f"No remaining sessions. Created and loading new session: {new_session_name}")
                     load_session(new_id)
             else:
                 populate_session_dropdown()
+        else:
+            logger.warning(f"Session to delete '{session_dropdown.value}' not found.")
+    else:
+        logger.warning("No session selected to delete.")
 
 def load_session(session_id: str):
     """Load a session by its ID and update the UI accordingly."""
+    logger.debug(f"Loading session with ID: {session_id}")
     global chat_manager
     you_name = chat_manager.you_name
     setting = chat_manager.current_setting
@@ -146,41 +192,61 @@ def load_session(session_id: str):
     show_chat_display.refresh()
     update_next_speaker_label()
     populate_session_dropdown()
+    logger.info(f"Session loaded: {session_id}")
 
 def select_setting(event):
     """Handle the event when a setting is selected from the dropdown."""
     chosen_name = event.value
+    logger.info(f"Setting selected: {chosen_name}")
     for s in ALL_SETTINGS:
         if s['name'] == chosen_name:
             chat_manager.set_current_setting(s['description'])
+            logger.debug(f"Current setting updated to: {s['description']}")
             break
+    else:
+        logger.warning(f"Selected setting '{chosen_name}' not found.")
 
 def toggle_automatic_chat(e):
     """Toggle the automatic chat feature on or off."""
     global auto_timer
+    state = "enabled" if e.value else "disabled"
+    logger.info(f"Automatic chat toggled {state}.")
     if e.value:
         if not chat_manager.get_character_names():
-            chat_manager.add_message("System", "No characters added. Please add characters to start automatic chat.", visible=True, message_type="system")
+            logger.warning("No characters added. Cannot start automatic chat.")
+            chat_manager.add_message(
+                "System",
+                "No characters added. Please add characters to start automatic chat.",
+                visible=True,
+                message_type="system"
+            )
             show_chat_display.refresh()
             e.value = False
             return
         chat_manager.start_automatic_chat()
         auto_timer.active = True
+        logger.info("Automatic chat started.")
     else:
         chat_manager.stop_automatic_chat()
         auto_timer.active = False
+        logger.info("Automatic chat stopped.")
     next_button.enabled = not chat_manager.automatic_running
     next_button.update()
 
 def set_you_name(_=None):
     """Set the user's name based on the input field."""
-    if you_name_input.value.strip():
-        chat_manager.set_you_name(you_name_input.value.strip())
+    name = you_name_input.value.strip()
+    if name:
+        logger.info(f"Setting user name to: {name}")
+        chat_manager.set_you_name(name)
         show_chat_display.refresh()
+    else:
+        logger.warning("Attempted to set empty user name.")
 
 @ui.refreshable
 def show_chat_display():
     """Refresh the chat display area with the latest messages."""
+    logger.debug("Refreshing chat display.")
     chat_display.clear()
     msgs = chat_manager.db.get_messages(chat_manager.session_id)
     with chat_display:
@@ -197,28 +263,37 @@ def show_chat_display():
             else:
                 formatted_message = f"**{name}** [{human_timestamp}]:\n\n{message}"
             ui.markdown(formatted_message)
+    logger.debug("Chat display refreshed.")
 
 async def automatic_conversation():
     """Check if automatic conversation should advance the dialogue."""
     if chat_manager.automatic_running:
+        logger.debug("Automatic conversation active. Generating next message.")
         next_char = chat_manager.next_speaker()
         if next_char:
             await generate_character_message(next_char)
             chat_manager.advance_turn()
             update_next_speaker_label()
+        else:
+            logger.debug("No next character to speak in automatic conversation.")
 
 async def next_character_response():
     """Generate the next character's response manually."""
     if chat_manager.automatic_running:
+        logger.debug("Automatic conversation is running. Manual next response ignored.")
         return
     next_char = chat_manager.next_speaker()
     if next_char:
+        logger.info(f"Generating response for character: {next_char}")
         await generate_character_message(next_char)
         chat_manager.advance_turn()
         update_next_speaker_label()
+    else:
+        logger.debug("No next character to respond.")
 
 async def generate_character_introduction_message(character_name: str):
     """Generate an introduction message for a new character."""
+    logger.info(f"Generating introduction message for character: {character_name}")
     (system_prompt, user_prompt) = chat_manager.build_prompt_for_character(character_name)
     user_prompt += "\n\nYou have just arrived in the conversation. Introduce yourself in detail, describing your physical appearance, attire, and how it fits with the setting and with any prior context that may be relevant."
 
@@ -227,18 +302,39 @@ async def generate_character_introduction_message(character_name: str):
         if isinstance(interaction, Interaction):
             formatted_message = f"*{interaction.action}*\n{interaction.dialogue}"
             # Store affect and purpose as well
-            chat_manager.add_message(character_name, formatted_message, visible=True, message_type="character", affect=interaction.affect, purpose=interaction.purpose)
+            chat_manager.add_message(
+                character_name,
+                formatted_message,
+                visible=True,
+                message_type="character",
+                affect=interaction.affect,
+                purpose=interaction.purpose
+            )
+            logger.info(f"Introduction message generated for {character_name}.")
         else:
             formatted_message = str(interaction) if interaction else "No introduction."
-            chat_manager.add_message(character_name, formatted_message, visible=True, message_type="character")
+            chat_manager.add_message(
+                character_name,
+                formatted_message,
+                visible=True,
+                message_type="character"
+            )
+            logger.warning(f"Unexpected interaction type for {character_name}: {interaction}")
     except Exception as e:
         formatted_message = f"Error generating introduction: {str(e)}"
-        chat_manager.add_message(character_name, formatted_message, visible=True, message_type="character")
+        chat_manager.add_message(
+            character_name,
+            formatted_message,
+            visible=True,
+            message_type="character"
+        )
+        logger.error(f"Error generating introduction for {character_name}: {e}")
 
     show_chat_display.refresh()
 
 async def generate_character_message(character_name: str):
     """Generate a message from a character."""
+    logger.info(f"Generating message for character: {character_name}")
     (system_prompt, user_prompt) = chat_manager.build_prompt_for_character(character_name)
 
     try:
@@ -246,22 +342,50 @@ async def generate_character_message(character_name: str):
         if isinstance(interaction, Interaction):
             formatted_message = f"*{interaction.action}*\n{interaction.dialogue}"
             # Store affect and purpose
-            chat_manager.add_message(character_name, formatted_message, visible=True, message_type="character", affect=interaction.affect, purpose=interaction.purpose)
+            chat_manager.add_message(
+                character_name,
+                formatted_message,
+                visible=True,
+                message_type="character",
+                affect=interaction.affect,
+                purpose=interaction.purpose
+            )
+            logger.debug(f"Message generated for {character_name}: {interaction.dialogue}")
         else:
             formatted_message = str(interaction) if interaction else "No response."
-            chat_manager.add_message(character_name, formatted_message, visible=True, message_type="character")
+            chat_manager.add_message(
+                character_name,
+                formatted_message,
+                visible=True,
+                message_type="character"
+            )
+            logger.warning(f"Unexpected interaction type for {character_name}: {interaction}")
     except Exception as e:
         formatted_message = f"Error: {str(e)}"
-        chat_manager.add_message(character_name, formatted_message, visible=True, message_type="character")
+        chat_manager.add_message(
+            character_name,
+            formatted_message,
+            visible=True,
+            message_type="character"
+        )
+        logger.error(f"Error generating message for {character_name}: {e}")
 
     show_chat_display.refresh()
 
 async def send_user_message():
     """Send the user's message to the chat."""
-    if not user_input.value.strip():
+    message = user_input.value.strip()
+    if not message:
+        logger.warning("Attempted to send empty user message.")
         return
 
-    chat_manager.add_message(chat_manager.you_name, user_input.value.strip(), visible=True, message_type="user")
+    logger.info(f"User sent message: {message}")
+    chat_manager.add_message(
+        chat_manager.you_name,
+        message,
+        visible=True,
+        message_type="user"
+    )
     show_chat_display.refresh()
     user_input.value = ''
     user_input.update()
@@ -272,13 +396,16 @@ async def send_user_message():
 async def add_character_from_dropdown(event):
     """Add a character to the chat based on dropdown selection."""
     if not event.value:
+        logger.warning("No character selected from dropdown.")
         return
     char_name = event.value
+    logger.info(f"Adding character from dropdown: {char_name}")
     char = ALL_CHARACTERS.get(char_name, None)
     if char:
         if char_name not in chat_manager.get_character_names():
             chat_manager.add_character(char_name, char)
             refresh_added_characters()
+            logger.info(f"Character '{char_name}' added to chat.")
 
             # Check if character has already spoken before introducing
             msgs = chat_manager.db.get_messages(chat_manager.session_id)
@@ -287,6 +414,11 @@ async def add_character_from_dropdown(event):
                 await generate_character_introduction_message(char_name)
             else:
                 show_chat_display.refresh()
+                logger.debug(f"Character '{char_name}' has already spoken before. No introduction needed.")
+        else:
+            logger.warning(f"Character '{char_name}' is already added.")
+    else:
+        logger.error(f"Character '{char_name}' not found in ALL_CHARACTERS.")
 
     update_next_speaker_label()
     character_dropdown.value = None
@@ -294,10 +426,12 @@ async def add_character_from_dropdown(event):
 
 def remove_character(name: str):
     """Remove a character from the chat."""
+    logger.info(f"Removing character: {name}")
     chat_manager.remove_character(name)
     refresh_added_characters()
     show_chat_display.refresh()
     update_next_speaker_label()
+    logger.debug(f"Character '{name}' removed from chat.")
 
 def main_page():
     """Set up the main UI components of the application."""
@@ -305,6 +439,7 @@ def main_page():
     global next_speaker_label, next_button, settings_dropdown, session_dropdown, chat_display
     global ALL_CHARACTERS, ALL_SETTINGS
 
+    logger.debug("Setting up main UI page.")
     ALL_CHARACTERS = get_available_characters(CHARACTERS_DIR)
     ALL_SETTINGS = load_settings()
 
@@ -376,28 +511,38 @@ def main_page():
             user_input = ui.input(placeholder='Enter your message...').classes('flex-grow')
             ui.button('Send', on_click=lambda: asyncio.create_task(send_user_message())).classes('ml-2')
 
-        # Now assign the on_change handler and set the default session value
+        # Assign the on_change handler and set the default session value
         session_dropdown.on('change', on_session_select)
         session_dropdown.value = chat_manager.get_session_name()  # Set default selected session
+        logger.debug("Main UI page setup complete.")
 
 def start_ui():
     """Initialize the application and start the UI."""
+    logger.info("Starting UI initialization.")
     default_session = str(uuid.uuid4())
     cm_temp = ChatManager()
     sessions = cm_temp.db.get_all_sessions()
     if not sessions:
+        logger.info("No existing sessions found. Creating default session.")
         cm_temp.db.create_session(default_session, f"Session {default_session}")
         init_chat_manager(default_session)
     else:
-        init_chat_manager(sessions[0]['session_id'])
+        first_session = sessions[0]
+        logger.info(f"Loading existing session: {first_session['name']} with ID: {first_session['session_id']}")
+        init_chat_manager(first_session['session_id'])
 
     main_page()
 
     # Use a ui.timer to periodically trigger automatic conversation
     global auto_timer
     auto_timer = ui.timer(interval=2.0, callback=lambda: asyncio.create_task(automatic_conversation()), active=False)
+    logger.info("UI timer for automatic conversation set up.")
 
     ui.run(reload=False)
+    logger.info("UI is running.")
 
 if __name__ == "__main__":
-    start_ui()
+    try:
+        start_ui()
+    except Exception as e:
+        logger.critical(f"Application crashed with exception: {e}", exc_info=True)
