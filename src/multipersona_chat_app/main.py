@@ -1,4 +1,3 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/main.py
 import os
 import logging
 from ui.app import start_ui

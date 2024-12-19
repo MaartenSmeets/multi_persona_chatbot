@@ -7,6 +7,7 @@ from chats.chat_manager import ChatManager
 import asyncio
 import yaml
 import uuid
+from datetime import datetime
 
 llm_client = None
 chat_manager = None
@@ -182,7 +183,7 @@ async def next_character_response():
 
 async def generate_character_introduction_message(character_name: str):
     (system_prompt, user_prompt) = chat_manager.build_prompt_for_character(character_name)
-    user_prompt += "\n\nYou have just arrived in the conversation. Introduce yourself, describing your physical appearance, attire, and how it fits with the setting and any prior context that may be relevant."
+    user_prompt += "\n\nYou have just arrived in the conversation. Introduce yourself, describing your physical appearance, attire, and how it fits with the setting and with any prior context that may be relevant."
 
     try:
         interaction = await asyncio.to_thread(llm_client.generate, prompt=user_prompt, system=system_prompt)
@@ -242,7 +243,10 @@ def update_chat_display():
         name = entry["sender"]
         message = entry["message"]
         timestamp = entry["timestamp"]
-        formatted_message = f"**{name}** [{timestamp}]:\n\n{message}"
+        # Convert timestamp to a more human-friendly format
+        dt = datetime.fromisoformat(timestamp)
+        human_timestamp = dt.strftime('%Y-%m-%d %H:%M:%S')
+        formatted_message = f"**{name}** [{human_timestamp}]:\n\n{message}"
         with chat_display:
             ui.markdown(formatted_message)
 

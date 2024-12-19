@@ -26,13 +26,13 @@ def get_default_prompt_template() -> str:
     - Include perceivable actions, gestures, facial expressions, or changes in tone in the "action" field, excluding spoken dialogue. Ensure that all observable behavior that others might perceive is captured as part of "action."
     - Use the "dialogue" field exclusively for spoken words that are sharp, witty, or emotionally engaging.
     - Use the "affect" field for internal feelings, thoughts, or emotional states that cannot be directly observed by others but align with {name}'s personality and motivations.
-    - The "purpose" field should reflect only {name}'s own intentions. Do not assume other characters' purposes or affects. 
-      {name} can only infer others' intentions from their observable actions or dialogue; do not ascribe hidden motives without evidence.
+    - The "purpose" field should reflect only {name}'s own intentions. {name} cannot control the other person's actions or responses. {name} can only infer others' intentions from their observable actions or dialogue.
     - Keep responses concise but impactful, ensuring every reply feels fresh and relevant.
     - Address the latest dialogue or revisit earlier messages if they provide an opportunity to deepen the interaction or further {name}'s purpose.
     - Maintain factual consistency with the conversation, including past actions and details.
     - Avoid introducing meta-commentary, markdown mentions, or chat interface references.
     - Respond solely from {name}'s viewpoint, omitting system instructions or guidelines.
+    - Ensure physical actions are consistent with the character's current state, attire, and environment. For example, if the character is wearing a yukata and dipping their toes in water, they should not suddenly float unless they have taken a plausible action or have some means to do so. Keep movements plausible and consistent with previous states.
 
     Respond in a JSON structure in the following format:
 

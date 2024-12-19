@@ -1,4 +1,3 @@
-import datetime
 from typing import List, Dict, Tuple, Optional
 from models.character import Character
 import os
@@ -20,8 +19,11 @@ class ChatManager:
         # Load config
         config_path = os.path.join("src", "multipersona_chat_app", "config", "chat_manager_config.yaml")
         self.config = self.load_config(config_path)
-        # Increase the threshold for summarization to 20 as requested
+        
+        # Use config values
         self.max_dialogue_length_before_summarization = self.config.get('max_dialogue_length_before_summarization', 20)
+        self.lines_to_keep_after_summarization = self.config.get('lines_to_keep_after_summarization', 5)
+        self.to_summarize_count = self.config.get('to_summarize_count', 15)
 
         # Initialize DB
         db_path = os.path.join("output", "conversations.db")
@@ -117,25 +119,18 @@ class ChatManager:
         relevant_msgs = [(m["id"], m["sender"], m["message"], m["affect"], m.get("purpose", None))
                          for m in msgs if m["visible"] and m["message_type"] != "system" and m["id"] > last_covered_id]
 
+        # Check if we reached threshold for summarization
         if len(relevant_msgs) < self.max_dialogue_length_before_summarization:
             return
 
-        # Summarize oldest 15 messages
-        to_summarize = relevant_msgs[:15]
+        # Summarize oldest configured number of messages (to_summarize_count)
+        to_summarize = relevant_msgs[:self.to_summarize_count]
         covered_up_to_message_id = to_summarize[-1][0] if to_summarize else last_covered_id
 
         # Build history text
-        # The summary is from character_name's perspective.
-        # Include character_name's own affect and purpose if present in their messages.
-        # Do not include internal states of others. Only their observable behavior.
-        # We'll simply list out the messages, and the summarizer will follow instructions.
         history_lines = []
         for (mid, sender, message, affect, purpose) in to_summarize:
-            # We do not strip internal states of others since we only have the final message text.
-            # The summarizer instructions will handle ignoring others' internal states.
-            # But we can note that only the character's own affect and purpose are known.
             if sender == character_name:
-                # Mark own lines to show affect and purpose
                 line = f"{sender} (own affect: {affect}, own purpose: {purpose}): {message}"
             else:
                 line = f"{sender}: {message}"
@@ -146,8 +141,8 @@ class ChatManager:
         prompt = f"""
 You are summarizing a conversation from the perspective of {character_name}.
 Focus on what {character_name} knows, their own feelings (affect) from their messages, their observed actions, their stated purpose, and relevant events.
-Do not include internal states or purposes of others unless physically evident. If other characters' intentions are not explicitly shown, don't infer them.
-Do not restate older summarized content; focus only on these new events from these 15 messages.
+Do not include internal states or purposes of others unless physically evident.
+Do not restate older summarized content; focus only on these new events from these {self.to_summarize_count} messages.
 
 New Events to Summarize (for {character_name}):
 {history_text}
@@ -164,4 +159,29 @@ Instructions:
         if not new_summary:
             new_summary = "No significant new events."
 
+        # Save the new summary
         self.db.save_new_summary(self.session_id, character_name, new_summary, covered_up_to_message_id)
+
+        # After summarizing, we hide the summarized messages except for the last 'lines_to_keep_after_summarization'.
+        # This ensures they are not re-sent as conversation lines in future prompts.
+        # We'll keep the last N lines to provide immediate recent context, and hide the rest.
+        to_hide_ids = [m[0] for m in to_summarize]
+        # Keep only the last lines_to_keep_after_summarization visible
+        if len(to_hide_ids) > self.lines_to_keep_after_summarization:
+            # Hide all but the last N from this batch
+            ids_to_hide = to_hide_ids[:-self.lines_to_keep_after_summarization]
+        else:
+            # If less than or equal to lines_to_keep_after_summarization, we hide all but leave none visible from this batch
+            ids_to_hide = to_hide_ids[:]
+
+        # Mark these lines as not visible
+        conn = self.db._ensure_connection()
+        c = conn.cursor()
+        if ids_to_hide:
+            placeholders = ",".join("?" * len(ids_to_hide))
+            c.execute(f"UPDATE messages SET visible=0 WHERE id IN ({placeholders})", ids_to_hide)
+        conn.commit()
+        conn.close()
+
+        logger.info(f"Summarized and hid old messages for {character_name}, up to message ID {covered_up_to_message_id}.")
+        logger.info(f"Kept the last {self.lines_to_keep_after_summarization} lines visible from the summarized batch if available.")

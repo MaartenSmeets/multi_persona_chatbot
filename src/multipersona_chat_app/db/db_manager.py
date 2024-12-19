@@ -1,5 +1,4 @@
 import sqlite3
-import os
 import datetime
 from typing import List, Dict, Optional
 
@@ -15,7 +14,9 @@ class DBManager:
         if column not in columns:
             c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
             conn.commit()
-
+    def _ensure_connection(self):
+        return sqlite3.connect(self.db_path)
+    
     def _ensure_db_structure(self):
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
