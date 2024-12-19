@@ -1,3 +1,4 @@
+# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/db/db_manager.py
 import sqlite3
 import datetime
 from typing import List, Dict, Optional
@@ -14,6 +15,7 @@ class DBManager:
         if column not in columns:
             c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
             conn.commit()
+
     def _ensure_connection(self):
         return sqlite3.connect(self.db_path)
     
@@ -28,6 +30,10 @@ class DBManager:
             created_at TEXT NOT NULL
         )
         """)
+
+        # Ensure current_setting column exists in sessions
+        self._ensure_column_exists(conn, "sessions", "current_setting", "TEXT")
+
         # messages table
         c.execute("""
         CREATE TABLE IF NOT EXISTS messages (
@@ -165,3 +171,22 @@ class DBManager:
         row = c.fetchone()
         conn.close()
         return row[0] if row[0] is not None else 0
+
+    # New Methods for Current Setting
+
+    def get_current_setting(self, session_id: str) -> Optional[str]:
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute("SELECT current_setting FROM sessions WHERE session_id=?", (session_id,))
+        row = c.fetchone()
+        conn.close()
+        if row and row[0]:
+            return row[0]
+        return None
+
+    def update_current_setting(self, session_id: str, setting: str):
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute("UPDATE sessions SET current_setting=? WHERE session_id=?", (setting, session_id))
+        conn.commit()
+        conn.close()

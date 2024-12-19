@@ -4,6 +4,7 @@ import os
 import logging
 
 from db.db_manager import DBManager
+from llm.ollama_client import OllamaClient
 
 logger = logging.getLogger(__name__)
 
@@ -13,26 +14,33 @@ class ChatManager:
         self.turn_index = 0
         self.automatic_running = False
         self.you_name = you_name
-        self.current_setting = "This is a shared conversation environment."
         self.session_id = session_id if session_id else "default_session"
 
-        # Load config
         config_path = os.path.join("src", "multipersona_chat_app", "config", "chat_manager_config.yaml")
         self.config = self.load_config(config_path)
         
-        # Use config values
         self.max_dialogue_length_before_summarization = self.config.get('max_dialogue_length_before_summarization', 20)
         self.lines_to_keep_after_summarization = self.config.get('lines_to_keep_after_summarization', 5)
         self.to_summarize_count = self.config.get('to_summarize_count', 15)
 
-        # Initialize DB
         db_path = os.path.join("output", "conversations.db")
         self.db = DBManager(db_path)
 
-        # If session does not exist, create it
         existing_sessions = {s['session_id']: s for s in self.db.get_all_sessions()}
         if self.session_id not in existing_sessions:
             self.db.create_session(self.session_id, f"Session {self.session_id}")
+            # No current setting in DB yet, use a default
+            self.current_setting = "This is a shared conversation environment."
+            self.db.update_current_setting(self.session_id, self.current_setting)
+        else:
+            # Load existing setting from DB if available
+            stored_setting = self.db.get_current_setting(self.session_id)
+            if stored_setting:
+                self.current_setting = stored_setting
+            else:
+                # If not found, use a default and store it
+                self.current_setting = "This is a shared conversation environment."
+                self.db.update_current_setting(self.session_id, self.current_setting)
 
     @staticmethod
     def load_config(config_path: str) -> dict:
@@ -41,11 +49,13 @@ class ChatManager:
             with open(config_path, 'r') as file:
                 config = yaml.safe_load(file)
             return config if config else {}
-        except:
+        except Exception as e:
+            logger.error(f"Error loading config from {config_path}: {e}")
             return {}
 
     def set_current_setting(self, setting_description: str):
         self.current_setting = setting_description
+        self.db.update_current_setting(self.session_id, self.current_setting)
 
     def get_character_names(self) -> List[str]:
         return list(self.characters.keys())
@@ -77,29 +87,18 @@ class ChatManager:
             return
         self.db.save_message(self.session_id, sender, message, visible, message_type, affect=affect, purpose=purpose)
         self.check_summarization()
+        # After every message, check if we need to update the setting
+        self.maybe_update_setting(sender, message)
 
     def get_visible_history(self) -> List[Tuple[str, str, str, Optional[str], int]]:
-        """
-        Return messages currently marked as visible. These visible messages are used for 
-        building the prompt context that is sent to the LLM. 
-        
-        Note: 'visible' is a backend concept that filters what is included in the prompt.
-        The frontend shows all messages regardless of their 'visible' status. 
-        """
         msgs = self.db.get_messages(self.session_id)
         return [(m["sender"], m["message"], m["message_type"], m["affect"], m["id"])
                 for m in msgs if m["visible"]]
 
     def build_prompt_for_character(self, character_name: str) -> Tuple[str, str]:
-        """
-        Build the system and user prompts for the given character. 
-        This uses only 'visible' messages from get_visible_history(), meaning 
-        previously summarized (and thus hidden from LLM prompt) lines are not included here.
-        """
         visible_history = self.get_visible_history()
         latest_dialogue = visible_history[-1][1] if visible_history else ""
 
-        # Combine all summaries for the character
         all_summaries = self.db.get_all_summaries(self.session_id, character_name)
         chat_history_summary = "\n\n".join(all_summaries) if all_summaries else ""
 
@@ -120,32 +119,21 @@ class ChatManager:
         self.automatic_running = False
 
     def check_summarization(self):
-        # Summarize per character if needed
         for char_name in self.characters:
             self.summarize_history_for_character(char_name)
 
     def summarize_history_for_character(self, character_name: str):
-        """
-        Summarize older parts of the conversation for a given character. 
-        
-        After summarizing, lines that have been summarized are marked as not 'visible' for future LLM prompts.
-        However, all messages remain stored in the database and are displayed to the user on the frontend.
-        The 'visible' flag only controls what the LLM sees, not what the user sees.
-        """
         msgs = self.db.get_messages(self.session_id)
         last_covered_id = self.db.get_latest_covered_message_id(self.session_id, character_name)
         relevant_msgs = [(m["id"], m["sender"], m["message"], m["affect"], m.get("purpose", None))
                          for m in msgs if m["visible"] and m["message_type"] != "system" and m["id"] > last_covered_id]
 
-        # Check if we reached threshold for summarization
         if len(relevant_msgs) < self.max_dialogue_length_before_summarization:
             return
 
-        # Summarize oldest configured number of messages (to_summarize_count)
         to_summarize = relevant_msgs[:self.to_summarize_count]
         covered_up_to_message_id = to_summarize[-1][0] if to_summarize else last_covered_id
 
-        # Build history text
         history_lines = []
         for (mid, sender, message, affect, purpose) in to_summarize:
             if sender == character_name:
@@ -171,30 +159,19 @@ Instructions:
 - Keep it short, focusing on notable changes, attempts to fulfill purpose, and new developments.
 """
 
-        from llm.ollama_client import OllamaClient
         summarize_llm = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml')
         new_summary = summarize_llm.generate(prompt=prompt)
         if not new_summary:
             new_summary = "No significant new events."
 
-        # Save the new summary
         self.db.save_new_summary(self.session_id, character_name, new_summary, covered_up_to_message_id)
 
-        # After summarizing, we mark most of these lines as not visible for the prompt. 
-        # This prevents them from being repeatedly fed into the model on subsequent turns.
-        # However, all messages remain in the database and thus are still displayed to the user.
-        # Only the model prompt is affected by the 'visible' flag.
         to_hide_ids = [m[0] for m in to_summarize]
-        # Keep only the last lines_to_keep_after_summarization visible for immediate context to the model
         if len(to_hide_ids) > self.lines_to_keep_after_summarization:
-            # Hide all but the last N from this batch (for the model prompt)
             ids_to_hide = to_hide_ids[:-self.lines_to_keep_after_summarization]
         else:
-            # If less or equal than lines_to_keep_after_summarization, we hide them all from the model prompt
             ids_to_hide = to_hide_ids[:]
 
-        # Mark these lines as not visible for the prompt (visible=0)
-        # This does not affect the user's view, as the frontend displays all messages regardless of visibility.
         conn = self.db._ensure_connection()
         c = conn.cursor()
         if ids_to_hide:
@@ -204,4 +181,41 @@ Instructions:
         conn.close()
 
         logger.info(f"Summarized and adjusted visibility for old messages for {character_name}, up to message ID {covered_up_to_message_id}.")
-        logger.info(f"These messages remain visible to the user on the frontend, but are hidden from future model prompts.")
+
+    def maybe_update_setting(self, sender: str, last_message: str):
+        """
+        Determine if the setting should be updated based on the latest message.
+        Uses the LLM to propose changes to the setting if necessary.
+        """
+
+        prompt = f"""
+Current Setting:
+{self.current_setting}
+
+Last Message (from {sender}):
+{last_message}
+
+If the last message indicates a change in location or environment that should be reflected in the setting (e.g., characters moving to a different area, entering a private room, changing weather, or new environmental details), update the setting description to incorporate these changes. 
+If no update is needed, simply repeat the current setting verbatim.
+
+Ensure the updated setting retains important context from the original but adds or modifies details relevant to the change.
+"""
+
+        llm = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml')
+        updated_setting = llm.generate(prompt=prompt)
+        if updated_setting and isinstance(updated_setting, str):
+            updated_setting = updated_setting.strip()
+            # If the setting changed, update it in the database and in memory
+            if updated_setting != self.current_setting:
+                self.current_setting = updated_setting
+                self.db.update_current_setting(self.session_id, self.current_setting)
+
+    def get_session_name(self) -> str:
+        """
+        Retrieve the name of the current session based on session_id.
+        """
+        sessions = self.db.get_all_sessions()
+        for session in sessions:
+            if session['session_id'] == self.session_id:
+                return session['name']
+        return "Unnamed Session"
