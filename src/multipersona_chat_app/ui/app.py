@@ -150,8 +150,14 @@ async def add_character_from_dropdown(event):
         if char:
             if char_name not in chat_manager.get_character_names():
                 chat_manager.add_character(char_name, char)
-                refresh_added_characters()
-                await generate_character_introduction_message(char_name)
+                
+                ### UPDATED: Check if character has already spoken before introducing.
+                msgs = chat_manager.db.get_messages(chat_manager.session_id)
+                previously_spoken = any(m for m in msgs if m["sender"] == char_name)
+                if not previously_spoken:
+                    await generate_character_introduction_message(char_name)
+                ### END UPDATED
+
         update_chat_display()
         update_next_speaker_label()
         character_dropdown.value = None
@@ -243,7 +249,6 @@ def update_chat_display():
         name = entry["sender"]
         message = entry["message"]
         timestamp = entry["timestamp"]
-        # Convert timestamp to a more human-friendly format
         dt = datetime.fromisoformat(timestamp)
         human_timestamp = dt.strftime('%Y-%m-%d %H:%M:%S')
         formatted_message = f"**{name}** [{human_timestamp}]:\n\n{message}"
