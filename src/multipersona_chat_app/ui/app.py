@@ -144,23 +144,30 @@ def set_you_name(name: str):
     update_chat_display()
 
 async def add_character_from_dropdown(event):
-    if event.value:
-        char_name = event.value
-        char = ALL_CHARACTERS.get(char_name, None)
-        if char:
-            if char_name not in chat_manager.get_character_names():
-                chat_manager.add_character(char_name, char)
-                
-                ### UPDATED: Check if character has already spoken before introducing.
-                msgs = chat_manager.db.get_messages(chat_manager.session_id)
-                previously_spoken = any(m for m in msgs if m["sender"] == char_name)
-                if not previously_spoken:
-                    await generate_character_introduction_message(char_name)
-                ### END UPDATED
+    if not event.value:
+        return
+    char_name = event.value
+    char = ALL_CHARACTERS.get(char_name, None)
+    if char:
+        if char_name not in chat_manager.get_character_names():
+            chat_manager.add_character(char_name, char)
+            ### UPDATED: Refresh the list of added characters here
+            refresh_added_characters()
 
-        update_chat_display()
-        update_next_speaker_label()
-        character_dropdown.value = None
+            # Check if character has already spoken before introducing
+            msgs = chat_manager.db.get_messages(chat_manager.session_id)
+            previously_spoken = any(m for m in msgs if m["sender"] == char_name)
+            if not previously_spoken:
+                await generate_character_introduction_message(char_name)
+            else:
+                # If already spoken, ensure the UI updates
+                refresh_added_characters()
+
+    update_chat_display()
+    update_next_speaker_label()
+    ### UPDATED: Reset dropdown value after successful addition
+    character_dropdown.value = None
+    character_dropdown.update()
 
 def remove_character(name: str):
     chat_manager.remove_character(name)
@@ -189,7 +196,7 @@ async def next_character_response():
 
 async def generate_character_introduction_message(character_name: str):
     (system_prompt, user_prompt) = chat_manager.build_prompt_for_character(character_name)
-    user_prompt += "\n\nYou have just arrived in the conversation. Introduce yourself, describing your physical appearance, attire, and how it fits with the setting and with any prior context that may be relevant."
+    user_prompt += "\n\nYou have just arrived in the conversation. Introduce yourself in detail, describing your physical appearance, attire, and how it fits with the setting and with any prior context that may be relevant."
 
     try:
         interaction = await asyncio.to_thread(llm_client.generate, prompt=user_prompt, system=system_prompt)
@@ -207,6 +214,8 @@ async def generate_character_introduction_message(character_name: str):
         purpose = None
 
     chat_manager.add_message(character_name, formatted_message, visible=True, message_type="character", affect=affect, purpose=purpose)
+    # After introducing, ensure characters are visible in UI
+    refresh_added_characters()
     update_chat_display()
 
 async def generate_character_message(character_name: str):
