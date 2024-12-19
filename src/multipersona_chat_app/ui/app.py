@@ -1,5 +1,3 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/ui/app.py
-
 import os
 from nicegui import ui, app
 from llm.ollama_client import OllamaClient
@@ -149,9 +147,7 @@ async def add_character_from_dropdown(event):
         char_name = event.value
         char = ALL_CHARACTERS.get(char_name, None)
         if char:
-            if char_name in chat_manager.get_character_names():
-                pass
-            else:
+            if char_name not in chat_manager.get_character_names():
                 chat_manager.add_character(char_name, char)
                 refresh_added_characters()
                 await generate_character_introduction_message(char_name)
@@ -186,20 +182,24 @@ async def next_character_response():
 
 async def generate_character_introduction_message(character_name: str):
     (system_prompt, user_prompt) = chat_manager.build_prompt_for_character(character_name)
-    user_prompt += "\n\nYou have just arrived in the conversation. As your first message, introduce yourself by describing your appearance, what can be perceived about you, and how you act, based on the conversation setting and your character's established background."
+    user_prompt += "\n\nYou have just arrived in the conversation. Introduce yourself, describing your physical appearance, attire, and how it fits with the setting and any prior context that may be relevant."
 
     try:
         interaction = await asyncio.to_thread(llm_client.generate, prompt=user_prompt, system=system_prompt)
-        if interaction and isinstance(interaction, Interaction):
+        if isinstance(interaction, Interaction):
+            affect = interaction.affect
+            purpose = interaction.purpose
             formatted_message = f"*{interaction.action}*\n{interaction.dialogue}"
-        elif interaction:
-            formatted_message = str(interaction)
         else:
-            formatted_message = "No introduction."
+            affect = None
+            purpose = None
+            formatted_message = str(interaction) if interaction else "No introduction."
     except Exception as e:
         formatted_message = f"Error generating introduction: {str(e)}"
+        affect = None
+        purpose = None
 
-    chat_manager.add_message(character_name, formatted_message, visible=True, message_type="character")
+    chat_manager.add_message(character_name, formatted_message, visible=True, message_type="character", affect=affect, purpose=purpose)
     update_chat_display()
 
 async def generate_character_message(character_name: str):
@@ -207,16 +207,20 @@ async def generate_character_message(character_name: str):
 
     try:
         interaction = await asyncio.to_thread(llm_client.generate, prompt=user_prompt, system=system_prompt)
-        if interaction and isinstance(interaction, Interaction):
+        if isinstance(interaction, Interaction):
+            affect = interaction.affect
+            purpose = interaction.purpose
             formatted_message = f"*{interaction.action}*\n{interaction.dialogue}"
-        elif interaction:
-            formatted_message = str(interaction)
         else:
-            formatted_message = "No response."
+            affect = None
+            purpose = None
+            formatted_message = str(interaction) if interaction else "No response."
     except Exception as e:
         formatted_message = f"Error: {str(e)}"
+        affect = None
+        purpose = None
 
-    chat_manager.add_message(character_name, formatted_message, visible=True, message_type="character")
+    chat_manager.add_message(character_name, formatted_message, visible=True, message_type="character", affect=affect, purpose=purpose)
     update_chat_display()
 
 async def send_user_message():
@@ -278,7 +282,7 @@ def main_page():
                 label="Choose a setting"
             ).classes('flex-grow')
 
-        # Add Characters Dropdown (async on_change)
+        # Add Characters Dropdown
         with ui.row().classes('w-full items-center mb-4'):
             ui.label("Select Character:").classes('w-1/4')
             character_dropdown = ui.select(
