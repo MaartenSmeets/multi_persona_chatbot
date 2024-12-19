@@ -79,12 +79,23 @@ class ChatManager:
         self.check_summarization()
 
     def get_visible_history(self) -> List[Tuple[str, str, str, Optional[str], int]]:
-        """Return visible messages with sender, message, type, affect, and id."""
+        """
+        Return messages currently marked as visible. These visible messages are used for 
+        building the prompt context that is sent to the LLM. 
+        
+        Note: 'visible' is a backend concept that filters what is included in the prompt.
+        The frontend shows all messages regardless of their 'visible' status. 
+        """
         msgs = self.db.get_messages(self.session_id)
         return [(m["sender"], m["message"], m["message_type"], m["affect"], m["id"])
                 for m in msgs if m["visible"]]
 
     def build_prompt_for_character(self, character_name: str) -> Tuple[str, str]:
+        """
+        Build the system and user prompts for the given character. 
+        This uses only 'visible' messages from get_visible_history(), meaning 
+        previously summarized (and thus hidden from LLM prompt) lines are not included here.
+        """
         visible_history = self.get_visible_history()
         latest_dialogue = visible_history[-1][1] if visible_history else ""
 
@@ -109,11 +120,18 @@ class ChatManager:
         self.automatic_running = False
 
     def check_summarization(self):
-        # Summarize per character
+        # Summarize per character if needed
         for char_name in self.characters:
             self.summarize_history_for_character(char_name)
 
     def summarize_history_for_character(self, character_name: str):
+        """
+        Summarize older parts of the conversation for a given character. 
+        
+        After summarizing, lines that have been summarized are marked as not 'visible' for future LLM prompts.
+        However, all messages remain stored in the database and are displayed to the user on the frontend.
+        The 'visible' flag only controls what the LLM sees, not what the user sees.
+        """
         msgs = self.db.get_messages(self.session_id)
         last_covered_id = self.db.get_latest_covered_message_id(self.session_id, character_name)
         relevant_msgs = [(m["id"], m["sender"], m["message"], m["affect"], m.get("purpose", None))
@@ -162,19 +180,21 @@ Instructions:
         # Save the new summary
         self.db.save_new_summary(self.session_id, character_name, new_summary, covered_up_to_message_id)
 
-        # After summarizing, we hide the summarized messages except for the last 'lines_to_keep_after_summarization'.
-        # This ensures they are not re-sent as conversation lines in future prompts.
-        # We'll keep the last N lines to provide immediate recent context, and hide the rest.
+        # After summarizing, we mark most of these lines as not visible for the prompt. 
+        # This prevents them from being repeatedly fed into the model on subsequent turns.
+        # However, all messages remain in the database and thus are still displayed to the user.
+        # Only the model prompt is affected by the 'visible' flag.
         to_hide_ids = [m[0] for m in to_summarize]
-        # Keep only the last lines_to_keep_after_summarization visible
+        # Keep only the last lines_to_keep_after_summarization visible for immediate context to the model
         if len(to_hide_ids) > self.lines_to_keep_after_summarization:
-            # Hide all but the last N from this batch
+            # Hide all but the last N from this batch (for the model prompt)
             ids_to_hide = to_hide_ids[:-self.lines_to_keep_after_summarization]
         else:
-            # If less than or equal to lines_to_keep_after_summarization, we hide all but leave none visible from this batch
+            # If less or equal than lines_to_keep_after_summarization, we hide them all from the model prompt
             ids_to_hide = to_hide_ids[:]
 
-        # Mark these lines as not visible
+        # Mark these lines as not visible for the prompt (visible=0)
+        # This does not affect the user's view, as the frontend displays all messages regardless of visibility.
         conn = self.db._ensure_connection()
         c = conn.cursor()
         if ids_to_hide:
@@ -183,5 +203,5 @@ Instructions:
         conn.commit()
         conn.close()
 
-        logger.info(f"Summarized and hid old messages for {character_name}, up to message ID {covered_up_to_message_id}.")
-        logger.info(f"Kept the last {self.lines_to_keep_after_summarization} lines visible from the summarized batch if available.")
+        logger.info(f"Summarized and adjusted visibility for old messages for {character_name}, up to message ID {covered_up_to_message_id}.")
+        logger.info(f"These messages remain visible to the user on the frontend, but are hidden from future model prompts.")

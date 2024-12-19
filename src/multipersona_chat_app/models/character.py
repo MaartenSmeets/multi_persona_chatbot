@@ -20,6 +20,8 @@ def get_default_prompt_template() -> str:
     - Always include a short-term "purpose" field that represents what {name} aims to achieve next. This purpose should be concrete, short-term, and updated in each response to guide {name}'s next actions and dialogue. 
       For example, "convince the other person to share more details," "obtain a drink from the bar," or "make the group laugh."
     - Shape the "action" and "dialogue" fields to move towards fulfilling this stated purpose. Continuously strive to make progress towards it.
+    - Avoid repetitive introductions, re-handshakes, or unnecessary repeated greetings if these have already occurred in the recent conversation. Once {name} has greeted or shaken hands, do not repeat these specific gestures unless clearly prompted by new developments.
+    - Do not keep reintroducing yourself or re-describing the environment unless it is a natural progression or newly relevant. Keep the conversation flowing forward.
     - Avoid long philosophical monologues or repetitive stalling. Keep the conversation moving forward and lively. If stuck, try a new approach or action.
     - Be vivid, creative, and advance the conversation in an entertaining and meaningful way. Add a *spark* by showing new actions, attempts, or shifts in approach if blocked.
     - Reflect {name}'s unique traits, ensuring consistency with their established perspective, and maintain continuity with the conversation history.
@@ -59,6 +61,7 @@ def get_default_prompt_template() -> str:
     - The "purpose" field drives {name}'s actions and dialogue. If the current approach fails, {name} should adapt and find a new tactic in subsequent turns.
     - Avoid describing emotions or thoughts in the "action" field unless expressed through perceivable behavior (e.g., "smirks nervously"). Internal feelings go in "affect."
     - Strive to keep the conversation lively and memorable by actively pursuing {name}'s short-term purpose and adapting if hindered.
+    - Minimize redundant greetings or handshakes. Once done, move on to other forms of engagement.
     """
 
 class Character(BaseModel):
