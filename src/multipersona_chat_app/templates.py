@@ -82,5 +82,5 @@ Incorporate the following details:
 - Your behavior, body language, and tone, and how these might affect others' impressions of you (e.g., making them feel welcomed, wary, intrigued, or uneasy).
 - Your personality and demeanor as reflected through your words and actions.
 
-Make the introduction vivid and engaging, and ensure it fits the setting and location.
+Make the introduction vivid and engaging, and ensure it fits the setting and location. Make the description elaborate and detailed, providing a rich context for others to interact with you.
 """
