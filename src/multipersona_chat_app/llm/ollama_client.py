@@ -1,4 +1,3 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/llm/ollama_client.py
 import requests
 import logging
 from typing import Optional, Type

@@ -1,4 +1,3 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/chats/chat_manager.py
 from typing import List, Dict, Tuple, Optional, Any
 from models.character import Character
 import os

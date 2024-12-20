@@ -1,4 +1,3 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/ui/app.py
 import os
 import uuid
 import asyncio

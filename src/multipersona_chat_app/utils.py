@@ -1,4 +1,3 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/utils.py
 """
 Utility functions for loading settings and characters.
 """

@@ -1,4 +1,3 @@
-# File: src/multipersona_chat_app/db/cache_manager.py
 import shelve
 import os
 import hashlib
