@@ -149,8 +149,6 @@ class ChatManager:
             return None
         message_id = self.db.save_message(self.session_id, sender, message, visible, message_type, affect, purpose)
         self.check_summarization()
-        # Location changes triggered by user commands have been removed for robustness.
-        # Now location changes rely solely on character responses (via new_location field) or code logic.
         return message_id
 
     def get_visible_history(self) -> List[Tuple[str, str, str, Optional[str], int]]:
@@ -172,11 +170,25 @@ class ChatManager:
         location = self.current_location if self.current_location else "An unspecified location."
         char = self.characters[character_name]
 
+        # Load morality guidelines
+        morality_config_path = os.path.join("src", "multipersona_chat_app", "config", "morality_guidelines.yaml")
+        try:
+            with open(morality_config_path, 'r') as f:
+                morality_data = yaml.safe_load(f)
+                morality_guidelines_template = morality_data.get('morality_guidelines', "")
+                morality_guidelines = morality_guidelines_template.replace("{name}", char.name)
+        except Exception as e:
+            logger.error(f"Failed to load morality guidelines: {e}")
+            morality_guidelines = ""
+
+        # Prepend morality guidelines to the system prompt
         system_prompt = (
+            f"{morality_guidelines}\n\n"
             f"{char.system_prompt_template}\n\n"
             f"Appearance: {char.appearance}\n"
             f"Character Description: {char.character_description}\n"
         )
+
         user_prompt = char.format_prompt(
             setting=setting_description,
             chat_history_summary=chat_history_summary,
@@ -218,17 +230,23 @@ class ChatManager:
 
         history_text = "\n".join(history_lines)
 
-        prompt = f"""
-You are summarizing a conversation from the perspective of {character_name}.
-Focus on what {character_name} knows, their own feelings (affect) from their messages, their observed actions, their stated purpose, and relevant events.
-Do not include internal states or purposes of others unless physically evident.
-Do not restate older summarized content; focus only on these new events from these {self.to_summarize_count} messages.
+
+
+        prompt = f"""You are summarizing the conversation from the perspective of {character_name}. Summarize only the newly presented events from these {self.to_summarize_count} recent messages.
+
+Your summary should:
+
+- Focus on what {character_name} directly observes, knows, or experiences.
+- Highlight {character_name}’s own visible actions, stated goals, and expressed feelings (affect) from their own messages.
+- Include only behavior and information that is manifestly evident (no guessing about others’ internal states or motives).
+- Omit previously summarized content; capture only the new developments introduced within these {self.to_summarize_count} messages.
+- Ensure that if any subtle changes occurred (even if minimal), they are noted. It cannot be “nothing happened.” or "No significant new events."
 
 New Events to Summarize (for {character_name}):
 {history_text}
 
 Instructions:
-- Provide a concise, high-quality summary chunk.
+- Produce a concise but rich summary of these new events.
 """
 
         summarize_llm = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml')

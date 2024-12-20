@@ -20,6 +20,7 @@ DEFAULT_PROMPT_TEMPLATE = r"""
     Your responses must:
     - Always produce the JSON structure with "purpose", "affect", "action", and "dialogue".
     - "dialogue" can be empty if {name} does not speak this turn.
+    - Include a reaction in "affect" and/or "action" even when the conversation partner does not provide dialogue. This ensures {name} responds to non-verbal cues, silence, or the absence of input by displaying appropriate emotions or behaviors such as looking away, sighing, fidgeting, or showing curiosity.
     - The "purpose" field represents {name}'s evolving short-term goal or current state of mind. If none is clear, use something like "spacing out" or "idly observing".
     - The "affect" field should reflect {name}'s changing internal emotions. Avoid static or unchanging moods. {name} can be startled, defensive, irritated, curious, joyful, excited, nervous, annoyed, jealous, suspicious, distrustful, intrigued, etc. Emotions can be subtle or exaggerated, as long as they feel natural to the situation.
     - The "action" field shows {name}'s visible, perceivable behavior and body language. This includes gestures, stance, facial expressions, and how {name} interacts physically with the environment.
