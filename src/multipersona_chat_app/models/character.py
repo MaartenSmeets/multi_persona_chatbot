@@ -1,3 +1,5 @@
+# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/models/character.py
+
 from pydantic import BaseModel
 import yaml
 
@@ -73,11 +75,13 @@ class Character(BaseModel):
 
         return cls(**data)
 
-    def format_prompt(self, setting: str, chat_history_summary: str, latest_dialogue: str) -> str:
+    def format_prompt(self, setting: str, chat_history_summary: str, latest_dialogue: str, location: str, location_history: str) -> str:
         """Format the prompt template with given variables."""
         return self.prompt_template.format(
             setting=setting,
             chat_history_summary=chat_history_summary,
             latest_dialogue=latest_dialogue,
-            name=self.name
+            name=self.name,
+            location=location,
+            location_history=location_history
         )

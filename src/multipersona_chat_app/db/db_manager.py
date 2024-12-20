@@ -1,5 +1,4 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chatbot/src/multipersona_chat_app/db/db_manager.py
-
+# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/db/db_manager.py
 import sqlite3
 import logging
 from typing import List, Dict, Any, Optional
@@ -35,6 +34,7 @@ class DBManager:
                 message_type TEXT DEFAULT 'user',
                 affect TEXT,
                 purpose TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(session_id) REFERENCES sessions(session_id)
             )
         ''')
@@ -208,7 +208,7 @@ class DBManager:
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
-            SELECT id, sender, message, visible, message_type, affect, purpose
+            SELECT id, sender, message, visible, message_type, affect, purpose, created_at
             FROM messages
             WHERE session_id = ?
             ORDER BY id ASC
@@ -223,7 +223,8 @@ class DBManager:
                 'visible': bool(row[3]),
                 'message_type': row[4],
                 'affect': row[5],
-                'purpose': row[6]
+                'purpose': row[6],
+                'created_at': row[7]
             })
         conn.close()
         logger.debug(f"Retrieved {len(messages)} messages for session '{session_id}'.")

@@ -1,6 +1,6 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chatbot/src/multipersona_chat_app/chats/chat_manager.py
+# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/chats/chat_manager.py
 
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
 from models.character import Character
 import os
 import logging
@@ -9,6 +9,7 @@ from typing import List, Dict, Tuple, Optional, Any
 
 from db.db_manager import DBManager
 from llm.ollama_client import OllamaClient
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +23,6 @@ class ChatManager:
 
         # Store settings in a dictionary for easy access
         self.settings = {setting['name']: setting for setting in settings}
-
-        # Flag to prevent changing settings after initialization
-        self.setting_locked = False
 
         config_path = os.path.join("src", "multipersona_chat_app", "config", "chat_manager_config.yaml")
         self.config = self.load_config(config_path)
@@ -53,7 +51,6 @@ class ChatManager:
                 self.current_location = "Initial Location within Default Setting."
                 self.db.update_current_setting(self.session_id, self.current_setting)
                 self.db.update_current_location(self.session_id, self.current_location)
-                self.setting_locked = True
         else:
             # Load existing setting and location from DB if available
             stored_setting = self.db.get_current_setting(self.session_id)
@@ -70,7 +67,6 @@ class ChatManager:
                     self.current_setting = stored_setting
                     self.current_location = "Initial Location within " + self.current_setting
                     self.db.update_current_location(self.session_id, self.current_location)
-                    self.setting_locked = True
             else:
                 # If no setting is stored, set to default
                 default_setting = self.settings.get("Default Setting")
@@ -85,7 +81,6 @@ class ChatManager:
                     self.current_location = "Initial Location within Default Setting."
                     self.db.update_current_setting(self.session_id, self.current_setting)
                     self.db.update_current_location(self.session_id, self.current_location)
-                    self.setting_locked = True
 
     @staticmethod
     def load_config(config_path: str) -> dict:
@@ -100,14 +95,6 @@ class ChatManager:
 
     def set_current_setting(self, setting_name: str, setting_description: str, start_location: str):
         """Set the current setting and initialize the current location based on start_location."""
-        if self.setting_locked:
-            if self.current_setting != setting_name:
-                logger.error("Attempted to change setting after initialization. Operation denied.")
-                raise PermissionError("Cannot change setting after initialization.")
-            else:
-                logger.debug("Setting is already locked and matches the requested setting. No action taken.")
-                return
-
         self.current_setting = setting_name
         self.db.update_current_setting(self.session_id, self.current_setting)
 
@@ -115,19 +102,29 @@ class ChatManager:
         self.db.update_current_location(self.session_id, self.current_location)
         logger.info(f"Setting changed to '{self.current_setting}' with start location '{self.current_location}'.")
 
-        # Lock the setting after it has been set once
-        self.setting_locked = True
-        logger.debug("Setting has been locked and cannot be changed further.")
-
     def set_current_location(self, new_location: str, triggered_by_message_id: Optional[int] = None):
         """Update the current location and log the change in location history."""
         self.current_location = new_location
         self.db.update_current_location(self.session_id, self.current_location, triggered_by_message_id)
         logger.info(f"Location updated to: {self.current_location}")
 
-    def get_location_history(self) -> List[Dict[str, Any]]:
-        """Retrieve the location history for the current session."""
-        return self.db.get_location_history(self.session_id)
+    def get_location_history(self) -> str:
+        """Retrieve the location history for the current session as a formatted string."""
+        history_entries = self.db.get_location_history(self.session_id)
+        if not history_entries:
+            return "No location changes yet."
+        history = []
+        for entry in history_entries:
+            changed_at = datetime.fromisoformat(entry["changed_at"]).strftime('%Y-%m-%d %H:%M:%S')
+            if entry["triggered_by_message_id"]:
+                # Fetch the sender's name from messages
+                msg = next((m for m in self.db.get_messages(self.session_id) if m['id'] == entry["triggered_by_message_id"]), None)
+                sender_name = msg['sender'] if msg else "Unknown"
+                message = msg['message'] if msg else "Unknown message."
+                history.append(f"**{entry['location']}** at {changed_at} by **{sender_name}**: _{message}_")
+            else:
+                history.append(f"**{entry['location']}** at {changed_at} by **System**")
+        return "\n".join(history)
 
     def get_character_names(self) -> List[str]:
         """Get a list of all added character names."""
@@ -217,11 +214,14 @@ class ChatManager:
 
         setting = self.current_setting
         location = self.current_location
+        location_history = self.get_location_history()
         char = self.characters[character_name]
         user_prompt = char.format_prompt(
             setting=setting,
             chat_history_summary=chat_history_summary,
-            latest_dialogue=latest_dialogue
+            latest_dialogue=latest_dialogue,
+            location=location,
+            location_history=location_history
         )
         system_prompt = char.system_prompt_template
         return (system_prompt, user_prompt)
