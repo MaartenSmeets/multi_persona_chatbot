@@ -1,4 +1,3 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/config/settings.yaml
 - name: "Default Setting"
   description: "A lively and sociable coffeehouse environment, designed for natural, friendly exchanges and lighthearted conversations."
   start_location: "A corner table in a popular downtown coffee shop with exposed brick walls, reclaimed wood furniture, and a chalkboard menu featuring artisan beverages. The hum of conversations blends with soft jazz playing in the background."

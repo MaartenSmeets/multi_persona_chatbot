@@ -11,6 +11,7 @@ from llm.ollama_client import OllamaClient
 from models.interaction import Interaction
 from models.character import Character
 from chats.chat_manager import ChatManager
+from utils import load_settings, get_available_characters
 
 logger = logging.getLogger(__name__)
 
@@ -38,39 +39,6 @@ ALL_SETTINGS = []
 introductions_given = {}
 
 llm_busy = False
-
-def load_settings() -> List[Dict]:
-    settings_path = os.path.join("src", "multipersona_chat_app", "config", "settings.yaml")
-    logger.debug(f"Loading settings from {settings_path}")
-    try:
-        with open(settings_path, 'r') as f:
-            data = yaml.safe_load(f)
-            if isinstance(data, list):
-                logger.info("Settings loaded successfully.")
-                return data
-            else:
-                logger.warning("Settings file does not contain a list. Returning empty list.")
-                return []
-    except Exception as e:
-        logger.error(f"Error loading settings: {e}")
-        return []
-
-def get_available_characters(directory: str) -> Dict[str, Character]:
-    logger.debug(f"Retrieving available characters from directory: {directory}")
-    characters = {}
-    try:
-        for filename in os.listdir(directory):
-            if filename.endswith('.yaml'):
-                yaml_path = os.path.join(directory, filename)
-                try:
-                    char = Character.from_yaml(yaml_path)
-                    characters[char.name] = char
-                    logger.info(f"Loaded character: {char.name}")
-                except Exception as e:
-                    logger.error(f"Error loading character from {yaml_path}: {e}")
-    except FileNotFoundError:
-        logger.error(f"Characters directory '{directory}' not found.")
-    return characters
 
 def init_chat_manager(session_id: str, settings: List[Dict]):
     global chat_manager, llm_client
@@ -171,6 +139,7 @@ def delete_session(_):
                     logger.info(f"Loading remaining session: {new_session['name']} with ID: {new_session['session_id']}")
                     load_session(new_session['session_id'])
                 else:
+                    # Create a new default session if none remain
                     new_id = str(uuid.uuid4())
                     new_session_name = f"Session {new_id}"
                     chat_manager.db.create_session(new_id, new_session_name)
@@ -196,6 +165,7 @@ def delete_session(_):
 
 def load_session(session_id: str):
     logger.debug(f"Loading session with ID: {session_id}")
+    chat_manager.session_id = session_id
     chat_manager.characters = {}
     introductions_given.clear()
 
@@ -222,7 +192,6 @@ def load_session(session_id: str):
         else:
             logger.error("No setting found and 'Intimate Setting' not available.")
 
-    # Load previously added characters
     session_chars = chat_manager.db.get_session_characters(session_id)
     for c_name in session_chars:
         if c_name in ALL_CHARACTERS:
@@ -236,7 +205,6 @@ def load_session(session_id: str):
     update_next_speaker_label()
     populate_session_dropdown()
     display_current_location()
-    chat_manager.session_id = session_id
     logger.info(f"Session loaded: {session_id}")
 
 def select_setting(event):
@@ -348,17 +316,9 @@ async def generate_character_introduction_message(character_name: str):
     logger.info(f"Generating introduction message for character: {character_name}")
     (system_prompt, user_prompt) = chat_manager.build_prompt_for_character(character_name)
 
-    char = chat_manager.characters[character_name]
-    user_prompt += f"""
-
-Introduce yourself. This introduction should set the scene for others. 
-Focus on what can be perceived in the current setting and location. 
-Incorporate the following details:
-- Appearance: {char.appearance}
-- Character/behavior: {char.character_description}
-
-Make it elaborate and fitting for the setting and current location.
-"""
+    # Retrieve introduction template from chat_manager
+    introduction_template = chat_manager.get_introduction_template()
+    user_prompt += f"\n\n{introduction_template}"
 
     global llm_busy
     llm_busy = True
@@ -409,8 +369,7 @@ async def generate_character_message(character_name: str):
     logger.info(f"Generating message for character: {character_name}")
     (system_prompt, user_prompt) = chat_manager.build_prompt_for_character(character_name)
 
-    # Check if this character has introduced themselves by now
-    # If not, and they have never spoken, produce the introduction first
+    # Check if this character has introduced themselves
     msgs = chat_manager.db.get_messages(chat_manager.session_id)
     char_spoken_before = any(m for m in msgs if m["sender"] == character_name and m["message_type"] == "character")
 
@@ -498,8 +457,6 @@ async def add_character_from_dropdown(event):
             introductions_given[char_name] = False
             refresh_added_characters()
             logger.info(f"Character '{char_name}' added to chat.")
-
-            # Do not generate introduction now. It will be generated when it's their turn.
             show_chat_display.refresh()
         else:
             logger.warning(f"Character '{char_name}' is already added.")
@@ -530,15 +487,13 @@ def main_page():
     ALL_CHARACTERS = get_available_characters(CHARACTERS_DIR)
     ALL_SETTINGS = load_settings()
 
-    # Create grid layout
     with ui.grid(columns=2).style('grid-template-columns: 1fr 2fr; height: 100vh;'):
-        # Left column for settings
         with ui.card().style('height: 100vh; overflow-y: auto;'):
             ui.label('Multipersona Chat Application').classes('text-2xl font-bold mb-4')
 
-            # Session Management
             with ui.row().classes('w-full items-center mb-4'):
                 ui.label("Session:").classes('w-1/4')
+                global session_dropdown
                 session_dropdown = ui.select(
                     options=[s['name'] for s in chat_manager.db.get_all_sessions()],
                     label="Choose a session",
@@ -547,13 +502,11 @@ def main_page():
                 ui.button("New Session", on_click=create_new_session).classes('ml-2')
                 ui.button("Delete Session", on_click=delete_session).classes('ml-2 bg-red-500 text-white')
 
-            # Configure "Your Name"
             with ui.row().classes('w-full items-center mb-4'):
                 ui.label("Your name:").classes('w-1/4')
                 you_name_input = ui.input(value=chat_manager.you_name).classes('flex-grow')
                 ui.button("Set", on_click=set_you_name).classes('ml-2')
 
-            # Select Setting
             with ui.row().classes('w-full items-center mb-4'):
                 ui.label("Select Setting:").classes('w-1/4')
                 settings_dropdown = ui.select(
@@ -562,55 +515,52 @@ def main_page():
                     label="Choose a setting"
                 ).classes('flex-grow')
 
-            # Display Current Location
             with ui.row().classes('w-full items-center mb-2'):
                 ui.label("Current Location:").classes('w-1/4')
                 current_location_label = ui.label(
                     chat_manager.current_location if chat_manager.current_location else "Not set."
                 ).classes('flex-grow text-gray-700')
 
-            # Add Characters
             with ui.row().classes('w-full items-center mb-4'):
                 ui.label("Select Character:").classes('w-1/4')
+                global character_dropdown
                 character_dropdown = ui.select(
                     options=list(ALL_CHARACTERS.keys()),
                     on_change=lambda e: asyncio.create_task(add_character_from_dropdown(e)),
                     label="Choose a character"
                 ).classes('flex-grow')
 
-            # List of Added Characters
             with ui.column().classes('w-full mb-4'):
                 ui.label("Added Characters:").classes('font-semibold mb-2')
+                global added_characters_container
                 added_characters_container = ui.row().classes('flex-wrap gap-2')
                 refresh_added_characters()
 
-            # Toggle Automatic Chat
             with ui.row().classes('w-full items-center mb-4'):
                 auto_switch = ui.switch('Automatic Chat', value=False, on_change=toggle_automatic_chat).classes('mr-2')
                 ui.button("Stop", on_click=lambda: chat_manager.stop_automatic_chat()).classes('ml-auto')
 
-            # Next Speaker Label
+            global next_speaker_label
             next_speaker_label = ui.label("Next speaker:").classes('text-sm text-gray-700')
             update_next_speaker_label()
 
-            # Next Button
+            global next_button
             next_button = ui.button("Next", on_click=lambda: asyncio.create_task(next_character_response()))
             next_button.props('outline')
             next_button.enabled = not chat_manager.automatic_running
             next_button.update()
 
-            # Busy indicator
+            global llm_busy_label
             llm_busy_label = ui.label("LLM is busy...").classes('text-red-500')
             llm_busy_label.visible = False
 
-        # Right column for chat
         with ui.card().style('height: 100vh; display: flex; flex-direction: column;'):
-            # Chat Display (with flex-grow to take remaining space)
+            global chat_display
             chat_display = ui.column().style('flex-grow: 1; overflow-y: auto;')
             show_chat_display()
 
-            # User Input (fixed at bottom)
             with ui.row().classes('w-full items-center p-4').style('flex-shrink: 0;'):
+                global user_input
                 user_input = ui.input(placeholder='Enter your message...').classes('flex-grow')
                 ui.button('Send', on_click=lambda: asyncio.create_task(send_user_message())).classes('ml-2')
 
