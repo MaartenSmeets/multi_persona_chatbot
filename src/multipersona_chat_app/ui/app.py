@@ -366,7 +366,10 @@ async def generate_character_introduction_message(character_name: str):
     """Generate an introduction message for a new character."""
     logger.info(f"Generating introduction message for character: {character_name}")
     (system_prompt, user_prompt) = chat_manager.build_prompt_for_character(character_name)
-    user_prompt += "\n\nYou have just arrived in the conversation. Introduce yourself in detail, describing your physical appearance, attire, and how it fits with the setting and the current location."
+    user_prompt += (
+        "\n\nYou have just arrived in the conversation. "
+        "When introducing yourself, provide a very elaborate description of your appearance, including your age, clothing/attire, build, hair color and style, and how you carry yourself. Also convey your behavior and energy. Make it fitting for the setting and the current location."
+    )
 
     try:
         interaction = await run.io_bound(llm_client.generate, prompt=user_prompt, system=system_prompt)
