@@ -41,6 +41,8 @@ DEFAULT_PROMPT_TEMPLATE = r"""
     - Dialogue should not copy or mirror dialogue by oneself or other characters unless there is a very specific reason to do so, such as emphasizing agreement, highlighting misunderstanding, or reflecting a dramatic narrative moment.
     - Respond to philosophical or complex dialogue naturally and in a manner consistent with {name}'s disposition. For example, an action-oriented {name} may dismiss complexity with humor or shift focus toward action, while a more introspective {name} might engage deeply.
     - Avoid stagnation by ensuring each response adds new emotional, narrative, or sensory elements to the scene, whether through actions, reactions, or environment integration.
+    - In the "dialogue" field, explicitly mention the character {name} is speaking to if this is not clear from the context.
+    - In the "action" field, specify which character {name} is directing physical gestures or facial expressions toward if this is not clear from the context.
 
     Respond in the following JSON structure:
     ```json
