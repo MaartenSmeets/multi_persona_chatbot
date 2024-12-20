@@ -1,7 +1,7 @@
-from typing import List, Dict, Tuple, Optional, Any
-from models.character import Character
 import os
 import logging
+from typing import List, Dict, Tuple, Optional, Any
+from models.character import Character
 from db.db_manager import DBManager
 from llm.ollama_client import OllamaClient
 from datetime import datetime
@@ -55,7 +55,6 @@ class ChatManager:
                         setting['start_location']
                     )
                 else:
-                    # fallback
                     intimate_setting = self.settings.get("Intimate Setting")
                     if intimate_setting:
                         self.set_current_setting(
@@ -93,7 +92,6 @@ class ChatManager:
             return {}
 
     def set_current_setting(self, setting_name: str, setting_description: str, start_location: str):
-        """Set the current setting and initialize the current location based on start_location."""
         self.current_setting = setting_name
         self.db.update_current_setting(self.session_id, self.current_setting)
         self.current_location = start_location
@@ -101,13 +99,11 @@ class ChatManager:
         logger.info(f"Setting changed to '{self.current_setting}' with start location '{self.current_location}'.")
 
     def set_current_location(self, new_location: str, triggered_by_message_id: Optional[int] = None):
-        """Update the current location and log it if triggered by a message."""
         self.current_location = new_location
         self.db.update_current_location(self.session_id, self.current_location, triggered_by_message_id)
         logger.info(f"Location updated to: {self.current_location}")
 
     def get_location_history(self) -> str:
-        """Retrieve the location history for the current session as a formatted string."""
         history_entries = self.db.get_location_history(self.session_id)
         if not history_entries:
             return "No location changes yet."
@@ -153,19 +149,9 @@ class ChatManager:
             return None
         message_id = self.db.save_message(self.session_id, sender, message, visible, message_type, affect, purpose)
         self.check_summarization()
-        if self.is_location_change_message(message):
-            new_location = self.extract_new_location(message)
-            if new_location:
-                self.set_current_location(new_location, triggered_by_message_id=message_id)
+        # Location changes triggered by user commands have been removed for robustness.
+        # Now location changes rely solely on character responses (via new_location field) or code logic.
         return message_id
-
-    def is_location_change_message(self, message: str) -> bool:
-        return message.lower().startswith("/move ")
-
-    def extract_new_location(self, message: str) -> Optional[str]:
-        if self.is_location_change_message(message):
-            return message[6:].strip()
-        return None
 
     def get_visible_history(self) -> List[Tuple[str, str, str, Optional[str], int]]:
         msgs = self.db.get_messages(self.session_id)
@@ -276,7 +262,4 @@ Instructions:
         return "Unnamed Session"
 
     def get_introduction_template(self) -> str:
-        """
-        Return the introduction template for the character introduction message.
-        """
         return INTRODUCTION_TEMPLATE

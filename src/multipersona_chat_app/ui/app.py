@@ -232,13 +232,7 @@ def toggle_automatic_chat(e):
     if e.value:
         if not chat_manager.get_character_names():
             logger.warning("No characters added. Cannot start automatic chat.")
-            chat_manager.add_message(
-                "System",
-                "No characters added. Please add characters to start automatic chat.",
-                visible=True,
-                message_type="system"
-            )
-            show_chat_display.refresh()
+            ui.notify("No characters added. Cannot start automatic chat.", type='warning')
             e.value = False
             return
         chat_manager.start_automatic_chat()
@@ -315,7 +309,6 @@ async def generate_character_introduction_message(character_name: str):
     logger.info(f"Generating introduction message for character: {character_name}")
     (system_prompt, user_prompt) = chat_manager.build_prompt_for_character(character_name)
 
-    # Retrieve introduction template from chat_manager
     introduction_template = chat_manager.get_introduction_template()
     user_prompt += f"\n\n{introduction_template}"
 
@@ -327,35 +320,28 @@ async def generate_character_introduction_message(character_name: str):
     try:
         interaction = await run.io_bound(llm_client.generate, prompt=user_prompt, system=system_prompt)
         if isinstance(interaction, Interaction):
-            formatted_message = f"*{interaction.action}*\n{interaction.dialogue}"
-            chat_manager.add_message(
-                character_name,
-                formatted_message,
-                visible=True,
-                message_type="character",
-                affect=interaction.affect,
-                purpose=interaction.purpose
-            )
-            introductions_given[character_name] = True
-            logger.info(f"Introduction message generated for {character_name}.")
+            # Check that fields are valid:
+            if (not interaction.purpose.strip() or not interaction.affect.strip() or not interaction.action.strip()):
+                logger.warning("Received incomplete interaction fields for introduction. Not storing.")
+            else:
+                formatted_message = f"*{interaction.action}*\n{interaction.dialogue}"
+                msg_id = chat_manager.add_message(
+                    character_name,
+                    formatted_message,
+                    visible=True,
+                    message_type="character",
+                    affect=interaction.affect,
+                    purpose=interaction.purpose
+                )
+                introductions_given[character_name] = True
+
+                # ADDED: Apply structured location change if provided
+                if interaction.new_location.strip():
+                    chat_manager.set_current_location(interaction.new_location, triggered_by_message_id=msg_id)
+                logger.info(f"Introduction message generated for {character_name}.")
         else:
-            formatted_message = str(interaction) if interaction else "No introduction."
-            chat_manager.add_message(
-                character_name,
-                formatted_message,
-                visible=True,
-                message_type="character"
-            )
-            introductions_given[character_name] = True
-            logger.warning(f"Unexpected interaction type for {character_name}: {interaction}")
+            logger.warning(f"Invalid or no response received for introduction of {character_name}. Not storing.")
     except Exception as e:
-        formatted_message = f"Error generating introduction: {str(e)}"
-        chat_manager.add_message(
-            character_name,
-            formatted_message,
-            visible=True,
-            message_type="character"
-        )
         logger.error(f"Error generating introduction for {character_name}: {e}")
     finally:
         llm_busy = False
@@ -388,33 +374,28 @@ async def generate_character_message(character_name: str):
     try:
         interaction = await run.io_bound(llm_client.generate, prompt=user_prompt, system=system_prompt)
         if isinstance(interaction, Interaction):
-            formatted_message = f"*{interaction.action}*\n{interaction.dialogue}"
-            chat_manager.add_message(
-                character_name,
-                formatted_message,
-                visible=True,
-                message_type="character",
-                affect=interaction.affect,
-                purpose=interaction.purpose
-            )
-            logger.debug(f"Message generated for {character_name}: {interaction.dialogue}")
+            # Check fields to ensure we got 'good' data
+            if (not interaction.purpose.strip() or not interaction.affect.strip() or not interaction.action.strip()):
+                logger.warning("Received incomplete interaction fields. Not storing message.")
+            else:
+                formatted_message = f"*{interaction.action}*\n{interaction.dialogue}"
+                msg_id = chat_manager.add_message(
+                    character_name,
+                    formatted_message,
+                    visible=True,
+                    message_type="character",
+                    affect=interaction.affect,
+                    purpose=interaction.purpose
+                )
+                
+                # ADDED: If the interaction indicates a location change, apply it
+                if interaction.new_location.strip():
+                    chat_manager.set_current_location(interaction.new_location, triggered_by_message_id=msg_id)
+
+                logger.debug(f"Message generated for {character_name}: {interaction.dialogue}")
         else:
-            formatted_message = str(interaction) if interaction else "No response."
-            chat_manager.add_message(
-                character_name,
-                formatted_message,
-                visible=True,
-                message_type="character"
-            )
-            logger.warning(f"Unexpected interaction type for {character_name}: {interaction}")
+            logger.warning(f"No valid interaction or no response for {character_name}. Not storing.")
     except Exception as e:
-        formatted_message = f"Error: {str(e)}"
-        chat_manager.add_message(
-            character_name,
-            formatted_message,
-            visible=True,
-            message_type="character"
-        )
         logger.error(f"Error generating message for {character_name}: {e}")
     finally:
         llm_busy = False
@@ -426,7 +407,7 @@ async def generate_character_message(character_name: str):
 async def send_user_message():
     message = user_input.value.strip()
     if not message:
-        logger.warning("Attempted to send empty user message.")
+        logger.warning("Attempted to send empty user message. Not allowed.")
         return
 
     logger.info(f"User sent message: {message}")

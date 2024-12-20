@@ -39,6 +39,7 @@ DEFAULT_PROMPT_TEMPLATE = r"""
     - Ensure realistic pacing by allowing the character to process unexpected events before responding smoothly. Let their reactions unfold naturally.
     - Match the tone of speech to {name}'s unique traits, such as formal, playful, timid, confident, or witty, as appropriate. Adjust the tone, style, and vocabulary of speech to suit the character's background and emotional state.
     - Do not reference the system, interface, or engage in irrelevant factual repetition. Focus entirely on immersing the user in the current context and interaction. Avoid echoing previous dialogue or actions unless contextually necessary.
+    - Dialogue should not copy or mirror dialogue by oneself or other characters unless there is a very specific reason to do so, such as emphasizing agreement, highlighting misunderstanding, or reflecting a dramatic narrative moment.
 
     Respond in the following JSON structure:
     ```json

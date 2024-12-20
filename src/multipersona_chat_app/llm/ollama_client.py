@@ -52,8 +52,10 @@ class OllamaClient:
                 try:
                     return self.output_model.parse_raw(cached_response)
                 except:
-                    return cached_response
-            return cached_response
+                    # CHANGED: On parse error, consider it an error, return None
+                    logger.error("Error parsing cached response. Treating as invalid and returning None.")
+                    return None
+            return None  # If no model, no guarantee this is good data, return None
 
         headers = {
             'Content-Type': 'application/json',
@@ -95,7 +97,8 @@ class OllamaClient:
                     self.config.get('api_url'),
                     headers=headers,
                     json=payload,
-                    stream=True
+                    stream=True,
+                    timeout=self.config.get('timeout', 300)  # ADDED: Ensure we respect timeout from config
                 ) as response:
                     logger.info(f"Received response with status code: {response.status_code}")
                     logger.info(f"Response Headers: {response.headers}")
@@ -121,19 +124,23 @@ class OllamaClient:
                         output += content
 
                         if data.get("done", False):
-                            # Cache the result
-                            self.cache_manager.store_response(prompt, model_name, output)
-
+                            # Attempt to parse
                             if self.output_model:
                                 try:
                                     parsed_output = self.output_model.parse_raw(output)
+                                    # Only cache if parsed successfully
+                                    self.cache_manager.store_response(prompt, model_name, output)
                                     logger.info(f"Final parsed output: {parsed_output}")
                                     return parsed_output
                                 except Exception as e:
                                     logger.error(f"Error parsing model output: {e}")
+                                    # CHANGED: On parsing error, consider it an error, return None without caching
                                     return None
-                            logger.info(f"Final output: {output}")
-                            return output
+                            else:
+                                # Without output model, we cannot guarantee correctness,
+                                # CHANGED: treat as error scenario
+                                logger.warning("No output_model provided; returning None.")
+                                return None
 
                     logger.error("No 'done' signal received before the stream ended.")
                     return None
@@ -141,9 +148,10 @@ class OllamaClient:
                 logger.warning(f"Attempt {attempt} failed: {e}")
                 if attempt == max_retries:
                     logger.error(f"All {max_retries} attempts failed. Giving up.")
-                    raise
+                    return None  # CHANGED: Return None on final failure
                 else:
                     logger.info(f"Retrying... (Attempt {attempt + 1} of {max_retries})")
             except Exception as e:
                 logger.error(f"An error occurred: {e}")
-                raise
+                # CHANGED: Return None on error instead of raising, to indicate no usable result
+                return None
