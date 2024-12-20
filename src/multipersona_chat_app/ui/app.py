@@ -530,9 +530,10 @@ def main_page():
     ALL_CHARACTERS = get_available_characters(CHARACTERS_DIR)
     ALL_SETTINGS = load_settings()
 
-    # Split the layout into two columns: left for settings, right for chat
-    with ui.row().classes('w-full h-screen flex'):
-        with ui.column().classes('w-1/3 p-4 bg-gray-200'):
+    # Create grid layout
+    with ui.grid(columns=2).style('grid-template-columns: 1fr 2fr; height: 100vh;'):
+        # Left column for settings
+        with ui.card().style('height: 100vh; overflow-y: auto;'):
             ui.label('Multipersona Chat Application').classes('text-2xl font-bold mb-4')
 
             # Session Management
@@ -602,19 +603,20 @@ def main_page():
             llm_busy_label = ui.label("LLM is busy...").classes('text-red-500')
             llm_busy_label.visible = False
 
-        with ui.column().classes('w-2/3 p-4 bg-white'):
-            # Chat Display
-            chat_display = ui.column().classes('space-y-2 p-4 bg-gray-100 rounded h-3/4 overflow-y-auto')
+        # Right column for chat
+        with ui.card().style('height: 100vh; display: flex; flex-direction: column;'):
+            # Chat Display (with flex-grow to take remaining space)
+            chat_display = ui.column().style('flex-grow: 1; overflow-y: auto;')
             show_chat_display()
 
-            # User Input
-            with ui.row().classes('w-full items-center mt-4'):
+            # User Input (fixed at bottom)
+            with ui.row().classes('w-full items-center p-4').style('flex-shrink: 0;'):
                 user_input = ui.input(placeholder='Enter your message...').classes('flex-grow')
                 ui.button('Send', on_click=lambda: asyncio.create_task(send_user_message())).classes('ml-2')
 
-        session_dropdown.on('change', on_session_select)
-        session_dropdown.value = chat_manager.get_session_name()
-        session_dropdown.update()
+    session_dropdown.on('change', on_session_select)
+    session_dropdown.value = chat_manager.get_session_name()
+    session_dropdown.update()
 
     logger.debug("Main UI page setup complete.")
 
