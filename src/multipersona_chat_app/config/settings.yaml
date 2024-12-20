@@ -3,8 +3,12 @@
   start_location: "A corner table in a popular downtown coffee shop with exposed brick walls, reclaimed wood furniture, and a chalkboard menu featuring artisan beverages. The hum of conversations blends with soft jazz playing in the background."
 
 - name: "Intimate Setting"
-  description: "A tranquil and romantic retreat nestled in Japan's forested mountains, offering a harmonious blend of natural beauty and cultural elegance."
-  start_location: "A private outdoor hot spring bordered by smooth stones and towering cedar trees, where steam rises gently into the cool night air under a sparkling starlit sky. Lanterns provide a warm glow, illuminating the path to a nearby traditional ryokan."
+  description: "A serene and intimate retreat nestled in Japan's forested
+mountains, offering a harmonious blend of natural beauty and cultural elegance."
+  start_location: "A secluded outdoor hot spring bordered by smooth stones and
+towering cedar trees. Steam rises gently into the cool night air under a sparkling
+starlit sky. Lanterns provide a warm glow, illuminating the path to a nearby
+traditional ryokan with plush tatami mats and soft futons."
 
 - name: "Formal Setting"
   description: "A sophisticated corporate environment crafted for productive and structured professional interactions, ensuring clarity and focus."

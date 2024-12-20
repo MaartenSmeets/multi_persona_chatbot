@@ -181,12 +181,12 @@ class ChatManager:
             logger.error(f"Failed to load morality guidelines: {e}")
             morality_guidelines = ""
 
-        # Prepend morality guidelines to the system prompt
+        # Append morality guidelines to the system prompt
         system_prompt = (
-            f"{morality_guidelines}\n\n"
             f"{char.system_prompt_template}\n\n"
             f"Appearance: {char.appearance}\n"
             f"Character Description: {char.character_description}\n"
+            f"Guidelines: {morality_guidelines}\n\n"
         )
 
         user_prompt = char.format_prompt(
