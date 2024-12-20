@@ -1,3 +1,5 @@
+# File: /home/maarten/multi_persona_chatbot/src/multipersona_chatbot/src/multipersona_chat_app/ui/app.py
+
 import os
 import uuid
 import asyncio
@@ -5,6 +7,7 @@ import yaml
 from datetime import datetime
 from nicegui import ui, app, run
 import logging
+from typing import List, Dict  # Ensure List and Dict are imported
 from llm.ollama_client import OllamaClient
 from models.interaction import Interaction
 from models.character import Character
@@ -26,13 +29,16 @@ settings_dropdown = None
 session_dropdown = None
 chat_display = None
 auto_timer = None  # We'll use a timer for automatic chatting
+location_input = None  # Changed from dropdown to input for flexibility
+location_history_display = None  # Added to display location history
 
 CHARACTERS_DIR = "src/multipersona_chat_app/characters"
 ALL_CHARACTERS = {}
 ALL_SETTINGS = []
 DB_PATH = os.path.join("output", "conversations.db")
 
-def load_settings():
+
+def load_settings() -> List[Dict]:
     """Load settings from the YAML configuration file."""
     settings_path = os.path.join("src", "multipersona_chat_app", "config", "settings.yaml")
     logger.debug(f"Loading settings from {settings_path}")
@@ -49,7 +55,8 @@ def load_settings():
         logger.error(f"Error loading settings: {e}")
         return []
 
-def get_available_characters(directory):
+
+def get_available_characters(directory: str) -> Dict[str, Character]:
     """Retrieve all available characters from the specified directory."""
     logger.debug(f"Retrieving available characters from directory: {directory}")
     characters = {}
@@ -67,16 +74,18 @@ def get_available_characters(directory):
         logger.error(f"Characters directory '{directory}' not found.")
     return characters
 
-def init_chat_manager(session_id: str):
+
+def init_chat_manager(session_id: str, settings: List[Dict]):
     """Initialize the ChatManager and LLM client with the given session ID."""
     global chat_manager, llm_client
     logger.debug(f"Initializing ChatManager with session_id: {session_id}")
-    chat_manager = ChatManager(you_name="You", session_id=session_id)
+    chat_manager = ChatManager(you_name="You", session_id=session_id, settings=settings)
     try:
         llm_client = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml', output_model=Interaction)
         logger.info("LLM Client initialized successfully.")
     except Exception as e:
         logger.error(f"Error initializing LLM Client: {e}")
+
 
 def refresh_added_characters():
     """Refresh the UI component that displays added characters."""
@@ -95,16 +104,26 @@ def refresh_added_characters():
     else:
         logger.error("added_characters_container is not initialized.")
 
+
 def update_next_speaker_label():
     """Update the label that shows who the next speaker is."""
+    global next_speaker_label
     ns = chat_manager.next_speaker()
     if ns:
-        next_speaker_label.text = f"Next speaker: {ns}"
-        logger.debug(f"Next speaker updated to: {ns}")
+        if next_speaker_label is not None:
+            next_speaker_label.text = f"Next speaker: {ns}"
+            logger.debug(f"Next speaker updated to: {ns}")
+            next_speaker_label.update()
+        else:
+            logger.error("next_speaker_label is not initialized.")
     else:
-        next_speaker_label.text = "No characters available."
-        logger.debug("No next speaker available.")
-    next_speaker_label.update()
+        if next_speaker_label is not None:
+            next_speaker_label.text = "No characters available."
+            logger.debug("No next speaker available.")
+            next_speaker_label.update()
+        else:
+            logger.error("next_speaker_label is not initialized.")
+
 
 def populate_session_dropdown():
     """Populate the session dropdown with available sessions and select the current one."""
@@ -120,6 +139,7 @@ def populate_session_dropdown():
         session_dropdown.value = None  # No session selected
         logger.info("No current session selected in dropdown.")
 
+
 def on_session_select(event):
     """Handle the event when a session is selected from the dropdown."""
     selected_name = event.value
@@ -132,13 +152,30 @@ def on_session_select(event):
             return
     logger.warning(f"Selected session name '{selected_name}' not found.")
 
+
 def create_new_session(_):
     """Create a new session and load it."""
     new_id = str(uuid.uuid4())
     session_name = f"Session {new_id}"
     logger.info(f"Creating new session: {session_name} with ID: {new_id}")
     chat_manager.db.create_session(new_id, session_name)
+    # Set the default setting and its start_location for the new session
+    default_setting = next((s for s in ALL_SETTINGS if s['name'] == "Default Setting"), None)
+    if default_setting:
+        chat_manager.set_current_setting(
+            default_setting['name'],
+            default_setting['description'],
+            default_setting['start_location']
+        )
+    else:
+        # Fallback if "Default Setting" is not found
+        chat_manager.set_current_setting(
+            "Default Setting",
+            "A lively and sociable coffeehouse environment, designed for natural, friendly exchanges and lighthearted conversations.",
+            "A corner table in a popular downtown coffee shop with exposed brick walls, reclaimed wood furniture, and a chalkboard menu featuring artisan beverages. The hum of conversations blends with soft jazz playing in the background."
+        )
     load_session(new_id)
+
 
 def delete_session(_):
     """Delete the selected session and handle UI updates."""
@@ -161,6 +198,21 @@ def delete_session(_):
                     new_id = str(uuid.uuid4())
                     new_session_name = f"Session {new_id}"
                     chat_manager.db.create_session(new_id, new_session_name)
+                    # Set the default setting and its start_location for the new session
+                    default_setting = next((s for s in ALL_SETTINGS if s['name'] == "Default Setting"), None)
+                    if default_setting:
+                        chat_manager.set_current_setting(
+                            default_setting['name'],
+                            default_setting['description'],
+                            default_setting['start_location']
+                        )
+                    else:
+                        # Fallback if "Default Setting" is not found
+                        chat_manager.set_current_setting(
+                            "Default Setting",
+                            "A lively and sociable coffeehouse environment, designed for natural, friendly exchanges and lighthearted conversations.",
+                            "A corner table in a popular downtown coffee shop with exposed brick walls, reclaimed wood furniture, and a chalkboard menu featuring artisan beverages. The hum of conversations blends with soft jazz playing in the background."
+                        )
                     logger.info(f"No remaining sessions. Created and loading new session: {new_session_name}")
                     load_session(new_id)
             else:
@@ -170,32 +222,64 @@ def delete_session(_):
     else:
         logger.warning("No session selected to delete.")
 
+
 def load_session(session_id: str):
     """Load a session by its ID and update the UI accordingly."""
     logger.debug(f"Loading session with ID: {session_id}")
-    global chat_manager
-    you_name = chat_manager.you_name
-    setting = chat_manager.current_setting
-    init_chat_manager(session_id)  # Reinitialize chat_manager with the new session
-    chat_manager.set_you_name(you_name)
-    chat_manager.set_current_setting(setting)
+    # Retrieve the current setting from the database
+    current_setting_name = chat_manager.db.get_current_setting(session_id)
+    setting = next((s for s in ALL_SETTINGS if s['name'] == current_setting_name), None)
+    if setting:
+        try:
+            chat_manager.set_current_setting(
+                setting['name'],
+                setting['description'],
+                setting['start_location']
+            )
+        except PermissionError as pe:
+            logger.error(f"Permission error while setting current setting: {pe}")
+            ui.notify(str(pe), type='error')
+    else:
+        # Fallback if setting not found
+        try:
+            chat_manager.set_current_setting(
+                "Default Setting",
+                "A lively and sociable coffeehouse environment, designed for natural, friendly exchanges and lighthearted conversations.",
+                "A corner table in a popular downtown coffee shop with exposed brick walls, reclaimed wood furniture, and a chalkboard menu featuring artisan beverages. The hum of conversations blends with soft jazz playing in the background."
+            )
+        except PermissionError as pe:
+            logger.error(f"Permission error while setting default setting: {pe}")
+            ui.notify(str(pe), type='error')
     refresh_added_characters()
     show_chat_display.refresh()
     update_next_speaker_label()
     populate_session_dropdown()
+    display_location_history()
     logger.info(f"Session loaded: {session_id}")
+
 
 def select_setting(event):
     """Handle the event when a setting is selected from the dropdown."""
     chosen_name = event.value
     logger.info(f"Setting selected: {chosen_name}")
-    for s in ALL_SETTINGS:
-        if s['name'] == chosen_name:
-            chat_manager.set_current_setting(s['description'])
-            logger.debug(f"Current setting updated to: {s['description']}")
-            break
+    setting = next((s for s in ALL_SETTINGS if s['name'] == chosen_name), None)
+    if setting:
+        try:
+            chat_manager.set_current_setting(
+                setting['name'],
+                setting['description'],
+                setting['start_location']
+            )
+            logger.debug(f"Current setting updated to: {setting['description']}")
+            # Optionally reset location when setting changes is already handled in set_current_setting
+            display_location_history()
+        except PermissionError as pe:
+            logger.error(f"Permission error: {pe}")
+            # Notify the user via the UI
+            ui.notify(str(pe), type='error')
     else:
         logger.warning(f"Selected setting '{chosen_name}' not found.")
+
 
 def toggle_automatic_chat(e):
     """Toggle the automatic chat feature on or off."""
@@ -215,14 +299,17 @@ def toggle_automatic_chat(e):
             e.value = False
             return
         chat_manager.start_automatic_chat()
-        auto_timer.active = True
-        logger.info("Automatic chat started.")
+        if auto_timer:
+            auto_timer.active = True
+            logger.info("Automatic chat started.")
     else:
         chat_manager.stop_automatic_chat()
-        auto_timer.active = False
-        logger.info("Automatic chat stopped.")
+        if auto_timer:
+            auto_timer.active = False
+            logger.info("Automatic chat stopped.")
     next_button.enabled = not chat_manager.automatic_running
     next_button.update()
+
 
 def set_you_name(_=None):
     """Set the user's name based on the input field."""
@@ -233,6 +320,7 @@ def set_you_name(_=None):
         show_chat_display.refresh()
     else:
         logger.warning("Attempted to set empty user name.")
+
 
 @ui.refreshable
 def show_chat_display():
@@ -256,6 +344,32 @@ def show_chat_display():
             ui.markdown(formatted_message)
     logger.debug("Chat display refreshed.")
 
+
+@ui.refreshable
+def display_location_history():
+    """Display the location history for the current session."""
+    logger.debug("Displaying location history.")
+    location_history_display.clear()
+    history = chat_manager.get_location_history()
+    with location_history_display:
+        ui.markdown("### Location History")
+        if not history:
+            ui.markdown("*No location changes yet.*")
+        else:
+            for entry in history:
+                changed_at = datetime.fromisoformat(entry["changed_at"]).strftime('%Y-%m-%d %H:%M:%S')
+                sender = entry["triggered_by_message_id"]
+                if sender:
+                    # Fetch the sender's name from messages
+                    msg = next((m for m in chat_manager.db.get_messages(chat_manager.session_id) if m['id'] == entry["triggered_by_message_id"]), None)
+                    sender_name = msg['sender'] if msg else "Unknown"
+                    message = msg['message'] if msg else "Unknown message."
+                    ui.markdown(f"- **{entry['location']}** at {changed_at} by **{sender_name}**: _{message}_")
+                else:
+                    ui.markdown(f"- **{entry['location']}** at {changed_at} by **System**")
+    logger.debug("Location history displayed.")
+
+
 async def automatic_conversation():
     """Check if automatic conversation should advance the dialogue."""
     if chat_manager.automatic_running:
@@ -267,6 +381,7 @@ async def automatic_conversation():
             update_next_speaker_label()
         else:
             logger.debug("No next character to speak in automatic conversation.")
+
 
 async def next_character_response():
     """Generate the next character's response manually."""
@@ -282,11 +397,12 @@ async def next_character_response():
     else:
         logger.debug("No next character to respond.")
 
+
 async def generate_character_introduction_message(character_name: str):
     """Generate an introduction message for a new character."""
     logger.info(f"Generating introduction message for character: {character_name}")
     (system_prompt, user_prompt) = chat_manager.build_prompt_for_character(character_name)
-    user_prompt += "\n\nYou have just arrived in the conversation. Introduce yourself in detail, describing your physical appearance, attire, and how it fits with the setting and with any prior context that may be relevant."
+    user_prompt += "\n\nYou have just arrived in the conversation. Introduce yourself in detail, describing your physical appearance, attire, and how it fits with the setting and the current location."
 
     try:
         interaction = await run.io_bound(llm_client.generate, prompt=user_prompt, system=system_prompt)
@@ -322,6 +438,7 @@ async def generate_character_introduction_message(character_name: str):
         logger.error(f"Error generating introduction for {character_name}: {e}")
 
     show_chat_display.refresh()
+
 
 async def generate_character_message(character_name: str):
     """Generate a message from a character."""
@@ -363,6 +480,7 @@ async def generate_character_message(character_name: str):
 
     show_chat_display.refresh()
 
+
 async def send_user_message():
     """Send the user's message to the chat."""
     message = user_input.value.strip()
@@ -371,7 +489,7 @@ async def send_user_message():
         return
 
     logger.info(f"User sent message: {message}")
-    chat_manager.add_message(
+    message_id = chat_manager.add_message(
         chat_manager.you_name,
         message,
         visible=True,
@@ -383,6 +501,15 @@ async def send_user_message():
 
     if not chat_manager.automatic_running:
         update_next_speaker_label()
+
+
+def add_location_change_triggered_message():
+    """
+    Optionally, you can implement a way to identify which message triggers a location change.
+    This function can be called after a user sends a message that changes location.
+    """
+    pass  # Handled within ChatManager's add_message method
+
 
 async def add_character_from_dropdown(event):
     """Add a character to the chat based on dropdown selection."""
@@ -415,6 +542,7 @@ async def add_character_from_dropdown(event):
     character_dropdown.value = None
     character_dropdown.update()
 
+
 def remove_character(name: str):
     """Remove a character from the chat."""
     logger.info(f"Removing character: {name}")
@@ -424,10 +552,12 @@ def remove_character(name: str):
     update_next_speaker_label()
     logger.debug(f"Character '{name}' removed from chat.")
 
+
 def main_page():
     """Set up the main UI components of the application."""
     global user_input, you_name_input, character_dropdown, added_characters_container
     global next_speaker_label, next_button, settings_dropdown, session_dropdown, chat_display
+    global location_input, location_history_display  # Updated for location history
     global ALL_CHARACTERS, ALL_SETTINGS
 
     logger.debug("Setting up main UI page.")
@@ -463,12 +593,26 @@ def main_page():
                 label="Choose a setting"
             ).classes('flex-grow')
 
+        # Set Location
+        with ui.row().classes('w-full items-center mb-4'):
+            ui.label("Set Location:").classes('w-1/4')
+            location_input = ui.input(
+                placeholder="Enter new location...",
+                label="New Location"
+            ).classes('flex-grow')
+            ui.button("Set Location", on_click=lambda: asyncio.create_task(set_location_from_input())).classes('ml-2')
+
+        # Display Location History
+        with ui.column().classes('w-full mb-4'):
+            location_history_display = ui.column().classes('space-y-1 p-2 bg-blue-50 rounded')
+            display_location_history()
+
         # Add Characters Dropdown
         with ui.row().classes('w-full items-center mb-4'):
             ui.label("Select Character:").classes('w-1/4')
             character_dropdown = ui.select(
                 options=list(ALL_CHARACTERS.keys()),
-                on_change=add_character_from_dropdown,
+                on_change=lambda e: asyncio.create_task(add_character_from_dropdown(e)),
                 label="Choose a character"
             ).classes('flex-grow')
 
@@ -507,22 +651,64 @@ def main_page():
         session_dropdown.value = chat_manager.get_session_name()  # Set default selected session
         logger.debug("Main UI page setup complete.")
 
+
+async def set_location_from_input():
+    """Set the location based on user input and log the triggering message."""
+    new_location = location_input.value.strip()
+    if not new_location:
+        logger.warning("Attempted to set empty location.")
+        return
+
+    # Assume the last user message is the one triggering the location change
+    msgs = chat_manager.db.get_messages(chat_manager.session_id)
+    if not msgs:
+        logger.warning("No messages found to trigger location change.")
+        return
+
+    last_message = msgs[-1]
+    if last_message["sender"] != chat_manager.you_name:
+        logger.warning("Last message was not from the user. Cannot set location.")
+        return
+
+    triggered_by_message_id = last_message["id"]
+    chat_manager.set_current_location(new_location, triggered_by_message_id=triggered_by_message_id)
+    logger.info(f"Location changed to '{new_location}' by message ID {triggered_by_message_id}")
+    display_location_history()
+
+
 def start_ui():
     """Initialize the application and start the UI."""
     logger.info("Starting UI initialization.")
     default_session = str(uuid.uuid4())
-    cm_temp = ChatManager()
-    sessions = cm_temp.db.get_all_sessions()
+    settings = load_settings()
+    init_chat_manager(default_session, settings)
+
+    main_page()  # Initialize the UI components before loading the session
+
+    sessions = chat_manager.db.get_all_sessions()
     if not sessions:
         logger.info("No existing sessions found. Creating default session.")
-        cm_temp.db.create_session(default_session, f"Session {default_session}")
-        init_chat_manager(default_session)
+        chat_manager.db.create_session(default_session, f"Session {default_session}")
+        # Set default setting and its start_location for the new session
+        default_setting = next((s for s in settings if s['name'] == "Default Setting"), None)
+        if default_setting:
+            chat_manager.set_current_setting(
+                default_setting['name'],
+                default_setting['description'],
+                default_setting['start_location']
+            )
+        else:
+            # Fallback if "Default Setting" is not found
+            chat_manager.set_current_setting(
+                "Default Setting",
+                "A lively and sociable coffeehouse environment, designed for natural, friendly exchanges and lighthearted conversations.",
+                "A corner table in a popular downtown coffee shop with exposed brick walls, reclaimed wood furniture, and a chalkboard menu featuring artisan beverages. The hum of conversations blends with soft jazz playing in the background."
+            )
+        load_session(default_session)
     else:
         first_session = sessions[0]
         logger.info(f"Loading existing session: {first_session['name']} with ID: {first_session['session_id']}")
-        init_chat_manager(first_session['session_id'])
-
-    main_page()
+        load_session(first_session['session_id'])
 
     # Use a ui.timer to periodically trigger automatic conversation
     global auto_timer
@@ -531,6 +717,7 @@ def start_ui():
 
     ui.run(reload=False)
     logger.info("UI is running.")
+
 
 if __name__ == "__main__":
     try:

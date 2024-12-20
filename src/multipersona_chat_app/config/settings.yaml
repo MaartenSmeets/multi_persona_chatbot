@@ -1,7 +1,20 @@
 # File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/config/settings.yaml
 - name: "Default Setting"
-  description: "A standard conversation environment."
+  description: "A lively and sociable coffeehouse environment, designed for natural, friendly exchanges and lighthearted conversations."
+  start_location: "A corner table in a popular downtown coffee shop with exposed brick walls, reclaimed wood furniture, and a chalkboard menu featuring artisan beverages. The hum of conversations blends with soft jazz playing in the background."
+
 - name: "Intimate Setting"
-  description: "Nestled in Japan's mountains, a serene resort beckoned under starry skies. Steaming hot springs and intimate mixed baths awaited, where guests in yukata robes strolled freely amidst cedar groves kissed by sunlight. Private rooms with tatami mats offered secluded escapes, each equipped with sake sets for quiet sipping. The uncrowded atmosphere allowed for peaceful reflections, making it an idyllic retreat amidst nature's splendor."
+  description: "A tranquil and romantic retreat nestled in Japan's forested mountains, offering a harmonious blend of natural beauty and cultural elegance."
+  start_location: "A private outdoor hot spring bordered by smooth stones and towering cedar trees, where steam rises gently into the cool night air under a sparkling starlit sky. Lanterns provide a warm glow, illuminating the path to a nearby traditional ryokan."
+
 - name: "Formal Setting"
-  description: "A professional and respectful environment."
+  description: "A sophisticated corporate environment crafted for productive and structured professional interactions, ensuring clarity and focus."
+  start_location: "A spacious and modern boardroom on the top floor of a skyscraper, featuring a polished oak table, ergonomic chairs, and a high-resolution projector displaying a presentation. Floor-to-ceiling windows reveal an expansive view of the city's skyline, adding a touch of grandeur."
+
+- name: "Adventurous Setting"
+  description: "A dramatic and untamed wilderness backdrop that inspires daring conversations and dynamic exchanges."
+  start_location: "A rugged cliffside campsite perched above a sweeping canyon, where the golden light of dawn reflects off jagged rock faces. A crackling campfire provides warmth as the distant roar of a waterfall and the cries of birds echo through the gorge."
+
+- name: "Relaxed Setting"
+  description: "A picturesque seaside environment where tranquility and leisure set the stage for easygoing and heartfelt conversations."
+  start_location: "A secluded beach lined with swaying palm trees and soft white sand, where the gentle rhythm of turquoise waves creates a calming ambiance. A comfortable cabana with plush seating and a nearby cooler stocked with refreshing drinks completes the serene picture."
