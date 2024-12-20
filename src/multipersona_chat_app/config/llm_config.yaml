@@ -5,3 +5,4 @@ api_key: ""  # Optional: Include if authentication is required
 max_retries: 3  # Number of retries for LLM requests
 temperature: 0.7  # Default temperature
 max_context_length: 128256  # Max context length before summarizing
+timeout: 300  # Timeout for LLM requests

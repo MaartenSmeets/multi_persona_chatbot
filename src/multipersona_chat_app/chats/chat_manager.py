@@ -1,12 +1,8 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/chats/chat_manager.py
-
 from typing import List, Dict, Tuple, Optional, Any
 from models.character import Character
 import os
 import logging
-import threading  # Added for threading
-from typing import List, Dict, Tuple, Optional, Any
-
+import threading
 from db.db_manager import DBManager
 from llm.ollama_client import OllamaClient
 from datetime import datetime
@@ -37,20 +33,18 @@ class ChatManager:
         existing_sessions = {s['session_id']: s for s in self.db.get_all_sessions()}
         if self.session_id not in existing_sessions:
             self.db.create_session(self.session_id, f"Session {self.session_id}")
-            # Set default setting and location based on settings
-            default_setting = self.settings.get("Default Setting")
-            if default_setting:
+            # Set the "Intimate Setting" by default if no setting in DB
+            intimate_setting = self.settings.get("Intimate Setting")
+            if intimate_setting:
                 self.set_current_setting(
-                    default_setting['name'],
-                    default_setting['description'],
-                    default_setting['start_location']
+                    intimate_setting['name'],
+                    intimate_setting['description'],
+                    intimate_setting['start_location']
                 )
             else:
-                # Fallback if "Default Setting" is not found
-                self.current_setting = "Default Setting"
-                self.current_location = "Initial Location within Default Setting."
-                self.db.update_current_setting(self.session_id, self.current_setting)
-                self.db.update_current_location(self.session_id, self.current_location)
+                logger.error("'Intimate Setting' not found in provided settings. No default setting will be applied.")
+                self.current_setting = None
+                self.current_location = None
         else:
             # Load existing setting and location from DB if available
             stored_setting = self.db.get_current_setting(self.session_id)
@@ -63,24 +57,34 @@ class ChatManager:
                         setting['start_location']
                     )
                 else:
-                    # If stored setting not found in current settings
-                    self.current_setting = stored_setting
-                    self.current_location = "Initial Location within " + self.current_setting
-                    self.db.update_current_location(self.session_id, self.current_location)
+                    # If stored setting not found in current settings, fallback to Intimate Setting
+                    intimate_setting = self.settings.get("Intimate Setting")
+                    if intimate_setting:
+                        self.set_current_setting(
+                            intimate_setting['name'],
+                            intimate_setting['description'],
+                            intimate_setting['start_location']
+                        )
+                    else:
+                        logger.error("No matching stored setting and 'Intimate Setting' not found.")
+                        self.current_setting = stored_setting
+                        self.current_location = "Initial Location within " + self.current_setting
+                        # Just update sessions location but no location history since no interaction
+                        self.db.update_current_setting(self.session_id, self.current_setting)
+                        self.db.update_current_location(self.session_id, self.current_location, None)
             else:
-                # If no setting is stored, set to default
-                default_setting = self.settings.get("Default Setting")
-                if default_setting:
+                # If no setting is stored, use Intimate Setting as default
+                intimate_setting = self.settings.get("Intimate Setting")
+                if intimate_setting:
                     self.set_current_setting(
-                        default_setting['name'],
-                        default_setting['description'],
-                        default_setting['start_location']
+                        intimate_setting['name'],
+                        intimate_setting['description'],
+                        intimate_setting['start_location']
                     )
                 else:
-                    self.current_setting = "Default Setting"
-                    self.current_location = "Initial Location within Default Setting."
-                    self.db.update_current_setting(self.session_id, self.current_setting)
-                    self.db.update_current_location(self.session_id, self.current_location)
+                    logger.error("'Intimate Setting' not found. No setting applied.")
+                    self.current_setting = None
+                    self.current_location = None
 
     @staticmethod
     def load_config(config_path: str) -> dict:
@@ -98,12 +102,13 @@ class ChatManager:
         self.current_setting = setting_name
         self.db.update_current_setting(self.session_id, self.current_setting)
 
+        # Update current_location in sessions but do not record in history since no interaction
         self.current_location = start_location
-        self.db.update_current_location(self.session_id, self.current_location)
+        self.db.update_current_location(self.session_id, self.current_location, None)
         logger.info(f"Setting changed to '{self.current_setting}' with start location '{self.current_location}'.")
 
     def set_current_location(self, new_location: str, triggered_by_message_id: Optional[int] = None):
-        """Update the current location and log the change in location history."""
+        """Update the current location and log the change in location history only if triggered by a message."""
         self.current_location = new_location
         self.db.update_current_location(self.session_id, self.current_location, triggered_by_message_id)
         logger.info(f"Location updated to: {self.current_location}")
@@ -123,6 +128,7 @@ class ChatManager:
                 message = msg['message'] if msg else "Unknown message."
                 history.append(f"**{entry['location']}** at {changed_at} by **{sender_name}**: _{message}_")
             else:
+                # This now won't generally occur since we only record location history on message trigger
                 history.append(f"**{entry['location']}** at {changed_at} by **System**")
         return "\n".join(history)
 
@@ -162,12 +168,10 @@ class ChatManager:
         update the current location accordingly.
         Returns the message ID if saved, else None.
         """
-        # Ignore system messages and thinking ("...") messages.
         if message_type == "system" or message.strip() == "...":
             return None
         message_id = self.db.save_message(self.session_id, sender, message, visible, message_type, affect, purpose)
         self.check_summarization()
-        # If the message contains a location change command, handle it
         if self.is_location_change_message(message):
             new_location = self.extract_new_location(message)
             if new_location:
@@ -176,74 +180,61 @@ class ChatManager:
         return message_id
 
     def is_location_change_message(self, message: str) -> bool:
-        """
-        Determine if the message contains a location change command.
-        This is a simple implementation; you may need a more sophisticated parser.
-        For example, you could define a specific syntax or keywords to indicate a location change.
-        """
         # Example: messages starting with "/move " indicate a location change
         return message.lower().startswith("/move ")
 
     def extract_new_location(self, message: str) -> Optional[str]:
-        """
-        Extract the new location from the message.
-        For example, if the message is "/move to the garden", it extracts "to the garden".
-        """
         if self.is_location_change_message(message):
             return message[6:].strip()  # Remove "/move " prefix
         return None
 
     def get_visible_history(self) -> List[Tuple[str, str, str, Optional[str], int]]:
-        """
-        Retrieve all visible messages for the current session.
-        Returns a list of tuples containing sender, message, message_type, affect, and message_id.
-        """
         msgs = self.db.get_messages(self.session_id)
         return [(m["sender"], m["message"], m["message_type"], m["affect"], m["id"])
                 for m in msgs if m["visible"]]
 
     def build_prompt_for_character(self, character_name: str) -> Tuple[str, str]:
-        """
-        Build the system and user prompts for a character based on the current session state.
-        """
         visible_history = self.get_visible_history()
         latest_dialogue = visible_history[-1][1] if visible_history else ""
 
         all_summaries = self.db.get_all_summaries(self.session_id, character_name)
         chat_history_summary = "\n\n".join(all_summaries) if all_summaries else ""
 
-        setting = self.current_setting
-        location = self.current_location
-        location_history = self.get_location_history()
+        # Retrieve the setting description instead of the setting name
+        if self.current_setting and self.current_setting in self.settings:
+            setting_description = self.settings[self.current_setting]['description']
+        else:
+            setting_description = "A tranquil environment."  # fallback if no setting available
+
+        location = self.current_location if self.current_location else "An unspecified location."
         char = self.characters[character_name]
+
+        # Combine appearance and character description into the system prompt
+        system_prompt = (
+            f"{char.system_prompt_template}\n\n"
+            f"Appearance: {char.appearance}\n"
+            f"Character Description: {char.character_description}\n"
+        )
         user_prompt = char.format_prompt(
-            setting=setting,
+            setting=setting_description,
             chat_history_summary=chat_history_summary,
             latest_dialogue=latest_dialogue,
-            location=location,
-            location_history=location_history
+            name=char.name,
+            location=location
         )
-        system_prompt = char.system_prompt_template
         return (system_prompt, user_prompt)
 
     def start_automatic_chat(self):
-        """Start the automatic chat feature."""
         self.automatic_running = True
 
     def stop_automatic_chat(self):
-        """Stop the automatic chat feature."""
         self.automatic_running = False
 
     def check_summarization(self):
-        """Check if summarization is needed for each character."""
         for char_name in self.characters:
             self.summarize_history_for_character(char_name)
 
     def summarize_history_for_character(self, character_name: str):
-        """
-        Summarize the conversation history for a specific character.
-        This helps in maintaining a concise context for the LLM.
-        """
         msgs = self.db.get_messages(self.session_id)
         last_covered_id = self.db.get_latest_covered_message_id(self.session_id, character_name)
         relevant_msgs = [(m["id"], m["sender"], m["message"], m["affect"], m.get("purpose", None))
@@ -275,9 +266,7 @@ New Events to Summarize (for {character_name}):
 {history_text}
 
 Instructions:
-- Provide a concise, high-quality summary chunk containing the most important new information from {character_name}'s perspective.
-- Include references to {character_name}'s own purpose and affect as revealed in their messages.
-- Keep it short, focusing on notable changes, attempts to fulfill purpose, and new developments.
+- Provide a concise, high-quality summary chunk.
 """
 
         summarize_llm = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml')
@@ -304,9 +293,6 @@ Instructions:
         logger.info(f"Summarized and adjusted visibility for old messages for {character_name}, up to message ID {covered_up_to_message_id}.")
 
     def get_session_name(self) -> str:
-        """
-        Retrieve the name of the current session based on session_id.
-        """
         sessions = self.db.get_all_sessions()
         for session in sessions:
             if session['session_id'] == self.session_id:

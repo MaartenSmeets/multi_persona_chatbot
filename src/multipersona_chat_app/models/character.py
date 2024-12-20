@@ -12,9 +12,6 @@ def get_default_prompt_template() -> str:
     ### Current Location ###
     {location}
 
-    ### Location History ###
-    {location_history}
-
     ### Chat History Summary ###
     {chat_history_summary}
 
@@ -77,9 +74,11 @@ def get_default_prompt_template() -> str:
     """
 
 class Character(BaseModel):
-    name: str  # Name of the character
-    system_prompt_template: str  # Template for system-level instructions
-    prompt_template: str  # Template for interactions
+    name: str
+    system_prompt_template: str
+    prompt_template: str
+    appearance: str
+    character_description: str
 
     @classmethod
     def from_yaml(cls, yaml_file: str) -> "Character":
@@ -87,19 +86,26 @@ class Character(BaseModel):
         with open(yaml_file, 'r') as file:
             data = yaml.safe_load(file)
 
-        # Use default prompt template if not provided
         if 'prompt_template' not in data or not data['prompt_template']:
             data['prompt_template'] = get_default_prompt_template()
 
-        return cls(**data)
+        appearance = data.get('appearance', "")
+        character_description = data.get('character_description', "")
 
-    def format_prompt(self, setting: str, chat_history_summary: str, latest_dialogue: str, location: str, location_history: str) -> str:
+        return cls(
+            name=data['name'],
+            system_prompt_template=data['system_prompt_template'],
+            prompt_template=data['prompt_template'],
+            appearance=appearance,
+            character_description=character_description
+        )
+
+    def format_prompt(self, setting: str, chat_history_summary: str, latest_dialogue: str, name: str, location: str) -> str:
         """Format the prompt template with given variables."""
         return self.prompt_template.format(
             setting=setting,
             chat_history_summary=chat_history_summary,
             latest_dialogue=latest_dialogue,
-            name=self.name,
-            location=location,
-            location_history=location_history
+            name=name,
+            location=location
         )

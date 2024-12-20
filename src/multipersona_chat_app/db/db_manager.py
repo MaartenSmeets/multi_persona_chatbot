@@ -1,4 +1,3 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/db/db_manager.py
 import sqlite3
 import logging
 from typing import List, Dict, Any, Optional
@@ -11,7 +10,6 @@ class DBManager:
         self._initialize_database()
 
     def _initialize_database(self):
-        """Initialize the database and create necessary tables if they don't exist."""
         conn = self._ensure_connection()
         c = conn.cursor()
         # Create sessions table
@@ -61,24 +59,27 @@ class DBManager:
                 FOREIGN KEY(triggered_by_message_id) REFERENCES messages(id)
             )
         ''')
+        # Create session_characters table
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS session_characters (
+                session_id TEXT NOT NULL,
+                character_name TEXT NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES sessions(session_id)
+            )
+        ''')
         conn.commit()
         conn.close()
         logger.info("Database initialized successfully with all required tables.")
 
     def _ensure_connection(self) -> sqlite3.Connection:
-        """Ensure that a connection to the database is established."""
         return sqlite3.connect(self.db_path)
 
-    # Session Management Methods
+    # Session Management
     def create_session(self, session_id: str, name: str):
-        """Create a new session."""
         conn = self._ensure_connection()
         c = conn.cursor()
         try:
-            c.execute('''
-                INSERT INTO sessions (session_id, name)
-                VALUES (?, ?)
-            ''', (session_id, name))
+            c.execute('INSERT INTO sessions (session_id, name) VALUES (?, ?)', (session_id, name))
             conn.commit()
             logger.info(f"Session '{name}' with ID '{session_id}' created.")
         except sqlite3.IntegrityError:
@@ -87,19 +88,18 @@ class DBManager:
             conn.close()
 
     def delete_session(self, session_id: str):
-        """Delete an existing session along with its messages, summaries, and location history."""
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('DELETE FROM summaries WHERE session_id = ?', (session_id,))
         c.execute('DELETE FROM messages WHERE session_id = ?', (session_id,))
         c.execute('DELETE FROM location_history WHERE session_id = ?', (session_id,))
+        c.execute('DELETE FROM session_characters WHERE session_id = ?', (session_id,))
         c.execute('DELETE FROM sessions WHERE session_id = ?', (session_id,))
         conn.commit()
         conn.close()
         logger.info(f"Session with ID '{session_id}' and all associated data deleted.")
 
     def get_all_sessions(self) -> List[Dict[str, Any]]:
-        """Retrieve all sessions."""
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('SELECT session_id, name FROM sessions')
@@ -110,7 +110,6 @@ class DBManager:
         return sessions
 
     def get_current_setting(self, session_id: str) -> Optional[str]:
-        """Retrieve the current setting of a session."""
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('SELECT current_setting FROM sessions WHERE session_id = ?', (session_id,))
@@ -123,7 +122,6 @@ class DBManager:
         return None
 
     def update_current_setting(self, session_id: str, setting_name: str):
-        """Update the current setting of a session."""
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('UPDATE sessions SET current_setting = ? WHERE session_id = ?', (setting_name, session_id))
@@ -132,7 +130,6 @@ class DBManager:
         logger.info(f"Session '{session_id}' updated with new setting '{setting_name}'.")
 
     def get_current_location(self, session_id: str) -> Optional[str]:
-        """Retrieve the current location of a session."""
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('SELECT current_location FROM sessions WHERE session_id = ?', (session_id,))
@@ -145,29 +142,21 @@ class DBManager:
         return None
 
     def update_current_location(self, session_id: str, location: str, triggered_by_message_id: Optional[int] = None):
-        """Update the current location of a session and log the change in location_history."""
         conn = self._ensure_connection()
         c = conn.cursor()
-        # Update current_location in sessions table
-        c.execute('''
-            UPDATE sessions
-            SET current_location = ?
-            WHERE session_id = ?
-        ''', (location, session_id))
-        # Insert into location_history table
-        c.execute('''
-            INSERT INTO location_history (session_id, location, triggered_by_message_id)
-            VALUES (?, ?, ?)
-        ''', (session_id, location, triggered_by_message_id))
+        # Always update current_location in sessions
+        c.execute('UPDATE sessions SET current_location = ? WHERE session_id = ?', (location, session_id))
+        # Only record location history if triggered by a message
+        if triggered_by_message_id is not None:
+            c.execute('INSERT INTO location_history (session_id, location, triggered_by_message_id) VALUES (?, ?, ?)', (session_id, location, triggered_by_message_id))
         conn.commit()
         conn.close()
         if triggered_by_message_id:
             logger.info(f"Session '{session_id}' location updated to '{location}' by message ID {triggered_by_message_id}.")
         else:
-            logger.info(f"Session '{session_id}' location updated to '{location}'.")
+            logger.info(f"Session '{session_id}' current location updated internally (no history recorded).")
 
     def get_location_history(self, session_id: str) -> List[Dict[str, Any]]:
-        """Retrieve the location history of a session."""
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
@@ -188,9 +177,35 @@ class DBManager:
         logger.debug(f"Retrieved {len(history)} location history entries for session '{session_id}'.")
         return history
 
-    # Message Management Methods
+    # Session Characters
+    def add_character_to_session(self, session_id: str, character_name: str):
+        conn = self._ensure_connection()
+        c = conn.cursor()
+        c.execute('INSERT INTO session_characters (session_id, character_name) VALUES (?, ?)', (session_id, character_name))
+        conn.commit()
+        conn.close()
+        logger.debug(f"Added character '{character_name}' to session '{session_id}'.")
+
+    def remove_character_from_session(self, session_id: str, character_name: str):
+        conn = self._ensure_connection()
+        c = conn.cursor()
+        c.execute('DELETE FROM session_characters WHERE session_id = ? AND character_name = ?', (session_id, character_name))
+        conn.commit()
+        conn.close()
+        logger.debug(f"Removed character '{character_name}' from session '{session_id}'.")
+
+    def get_session_characters(self, session_id: str) -> List[str]:
+        conn = self._ensure_connection()
+        c = conn.cursor()
+        c.execute('SELECT character_name FROM session_characters WHERE session_id = ?', (session_id,))
+        rows = c.fetchall()
+        conn.close()
+        chars = [r[0] for r in rows]
+        logger.debug(f"Retrieved {len(chars)} characters for session '{session_id}'.")
+        return chars
+
+    # Messages
     def save_message(self, session_id: str, sender: str, message: str, visible: bool = True, message_type: str = "user", affect: Optional[str]=None, purpose: Optional[str]=None) -> int:
-        """Save a new message to the database."""
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
@@ -204,7 +219,6 @@ class DBManager:
         return message_id
 
     def get_messages(self, session_id: str) -> List[Dict[str, Any]]:
-        """Retrieve all messages for a given session."""
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
@@ -230,9 +244,8 @@ class DBManager:
         logger.debug(f"Retrieved {len(messages)} messages for session '{session_id}'.")
         return messages
 
-    # Summaries Management Methods
+    # Summaries
     def save_new_summary(self, session_id: str, character_name: str, summary: str, covered_up_to_message_id: int):
-        """Save a new summary for a character in a session."""
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
@@ -244,7 +257,6 @@ class DBManager:
         logger.debug(f"Summary saved for character '{character_name}' in session '{session_id}' up to message ID {covered_up_to_message_id}.")
 
     def get_all_summaries(self, session_id: str, character_name: str) -> List[str]:
-        """Retrieve all summaries for a character in a session."""
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
@@ -259,7 +271,6 @@ class DBManager:
         return summaries
 
     def get_latest_covered_message_id(self, session_id: str, character_name: str) -> int:
-        """Retrieve the latest covered message ID for a character in a session."""
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''

@@ -1,3 +1,4 @@
+# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/ui/app.py
 import os
 import uuid
 import asyncio
@@ -13,7 +14,6 @@ from chats.chat_manager import ChatManager
 
 logger = logging.getLogger(__name__)
 
-# Initialize global variables
 llm_client = None
 chat_manager = None
 
@@ -28,15 +28,18 @@ session_dropdown = None
 chat_display = None
 auto_timer = None
 current_location_label = None
+llm_busy_label = None
 
 CHARACTERS_DIR = "src/multipersona_chat_app/characters"
 ALL_CHARACTERS = {}
 ALL_SETTINGS = []
-DB_PATH = os.path.join("output", "conversations.db")
 
+# Track which characters have given their introduction
+introductions_given = {}
+
+llm_busy = False
 
 def load_settings() -> List[Dict]:
-    """Load settings from the YAML configuration file."""
     settings_path = os.path.join("src", "multipersona_chat_app", "config", "settings.yaml")
     logger.debug(f"Loading settings from {settings_path}")
     try:
@@ -52,9 +55,7 @@ def load_settings() -> List[Dict]:
         logger.error(f"Error loading settings: {e}")
         return []
 
-
 def get_available_characters(directory: str) -> Dict[str, Character]:
-    """Retrieve all available characters from the specified directory."""
     logger.debug(f"Retrieving available characters from directory: {directory}")
     characters = {}
     try:
@@ -71,9 +72,7 @@ def get_available_characters(directory: str) -> Dict[str, Character]:
         logger.error(f"Characters directory '{directory}' not found.")
     return characters
 
-
 def init_chat_manager(session_id: str, settings: List[Dict]):
-    """Initialize the ChatManager and LLM client with the given session ID."""
     global chat_manager, llm_client
     logger.debug(f"Initializing ChatManager with session_id: {session_id}")
     chat_manager = ChatManager(you_name="You", session_id=session_id, settings=settings)
@@ -83,9 +82,7 @@ def init_chat_manager(session_id: str, settings: List[Dict]):
     except Exception as e:
         logger.error(f"Error initializing LLM Client: {e}")
 
-
 def refresh_added_characters():
-    """Refresh the UI component that displays added characters."""
     logger.debug("Refreshing added characters in UI.")
     if added_characters_container is not None:
         added_characters_container.clear()
@@ -101,29 +98,22 @@ def refresh_added_characters():
     else:
         logger.error("added_characters_container is not initialized.")
 
-
 def update_next_speaker_label():
-    """Update the label that shows who the next speaker is."""
-    global next_speaker_label
     ns = chat_manager.next_speaker()
     if ns:
         if next_speaker_label is not None:
             next_speaker_label.text = f"Next speaker: {ns}"
-            logger.debug(f"Next speaker updated to: {ns}")
             next_speaker_label.update()
         else:
             logger.error("next_speaker_label is not initialized.")
     else:
         if next_speaker_label is not None:
             next_speaker_label.text = "No characters available."
-            logger.debug("No next speaker available.")
             next_speaker_label.update()
         else:
             logger.error("next_speaker_label is not initialized.")
 
-
 def populate_session_dropdown():
-    """Populate the session dropdown with available sessions and select the current one."""
     logger.debug("Populating session dropdown.")
     sessions = chat_manager.db.get_all_sessions()
     session_names = [s['name'] for s in sessions]
@@ -133,47 +123,39 @@ def populate_session_dropdown():
         session_dropdown.value = current[0]['name']
         logger.info(f"Session dropdown set to current session: {current[0]['name']}")
     else:
-        session_dropdown.value = None  # No session selected
-        logger.info("No current session selected in dropdown.")
-
+        session_dropdown.value = None
 
 def on_session_select(event):
-    """Handle the event when a session is selected from the dropdown."""
     selected_name = event.value
     logger.info(f"Session selected: {selected_name}")
     sessions = chat_manager.db.get_all_sessions()
     for s in sessions:
         if s['name'] == selected_name:
             load_session(s['session_id'])
-            logger.debug(f"Loaded session with ID: {s['session_id']}")
             return
     logger.warning(f"Selected session name '{selected_name}' not found.")
 
-
 def create_new_session(_):
-    """Create a new session and load it."""
     new_id = str(uuid.uuid4())
     session_name = f"Session {new_id}"
     logger.info(f"Creating new session: {session_name} with ID: {new_id}")
     chat_manager.db.create_session(new_id, session_name)
-    default_setting = next((s for s in ALL_SETTINGS if s['name'] == "Default Setting"), None)
-    if default_setting:
+
+    intimate_setting = next((s for s in ALL_SETTINGS if s['name'] == "Intimate Setting"), None)
+    if intimate_setting:
         chat_manager.set_current_setting(
-            default_setting['name'],
-            default_setting['description'],
-            default_setting['start_location']
+            intimate_setting['name'],
+            intimate_setting['description'],
+            intimate_setting['start_location']
         )
+        settings_dropdown.value = intimate_setting['name']
+        settings_dropdown.update()
     else:
-        chat_manager.set_current_setting(
-            "Default Setting",
-            "A lively and sociable coffeehouse environment, designed for natural, friendly exchanges and lighthearted conversations.",
-            "A corner table in a popular downtown coffee shop with exposed brick walls, reclaimed wood furniture, and a chalkboard menu featuring artisan beverages."
-        )
+        logger.error("'Intimate Setting' not found in settings. No default setting applied.")
+
     load_session(new_id)
 
-
 def delete_session(_):
-    """Delete the selected session and handle UI updates."""
     logger.info("Attempting to delete selected session.")
     sessions = chat_manager.db.get_all_sessions()
     if session_dropdown.value:
@@ -182,7 +164,6 @@ def delete_session(_):
             sid = to_delete[0]['session_id']
             logger.info(f"Deleting session: {to_delete[0]['name']} with ID: {sid}")
             chat_manager.db.delete_session(sid)
-            # If the current session is deleted, create and load a new one
             if sid == chat_manager.session_id:
                 remaining_sessions = chat_manager.db.get_all_sessions()
                 if remaining_sessions:
@@ -193,19 +174,17 @@ def delete_session(_):
                     new_id = str(uuid.uuid4())
                     new_session_name = f"Session {new_id}"
                     chat_manager.db.create_session(new_id, new_session_name)
-                    default_setting = next((s for s in ALL_SETTINGS if s['name'] == "Default Setting"), None)
-                    if default_setting:
+                    intimate_setting = next((s for s in ALL_SETTINGS if s['name'] == "Intimate Setting"), None)
+                    if intimate_setting:
                         chat_manager.set_current_setting(
-                            default_setting['name'],
-                            default_setting['description'],
-                            default_setting['start_location']
+                            intimate_setting['name'],
+                            intimate_setting['description'],
+                            intimate_setting['start_location']
                         )
+                        settings_dropdown.value = intimate_setting['name']
+                        settings_dropdown.update()
                     else:
-                        chat_manager.set_current_setting(
-                            "Default Setting",
-                            "A lively and sociable coffeehouse environment, designed for natural, friendly exchanges and lighthearted conversations.",
-                            "A corner table in a popular downtown coffee shop with exposed brick walls, reclaimed wood furniture, and a chalkboard menu featuring artisan beverages."
-                        )
+                        logger.error("'Intimate Setting' not found. No default setting on new session.")
                     logger.info(f"No remaining sessions. Created and loading new session: {new_session_name}")
                     load_session(new_id)
             else:
@@ -215,10 +194,11 @@ def delete_session(_):
     else:
         logger.warning("No session selected to delete.")
 
-
 def load_session(session_id: str):
-    """Load a session by its ID and update the UI accordingly."""
     logger.debug(f"Loading session with ID: {session_id}")
+    chat_manager.characters = {}
+    introductions_given.clear()
+
     current_setting_name = chat_manager.db.get_current_setting(session_id)
     setting = next((s for s in ALL_SETTINGS if s['name'] == current_setting_name), None)
     if setting:
@@ -227,23 +207,39 @@ def load_session(session_id: str):
             setting['description'],
             setting['start_location']
         )
+        settings_dropdown.value = setting['name']
+        settings_dropdown.update()
     else:
-        chat_manager.set_current_setting(
-            "Default Setting",
-            "A lively and sociable coffeehouse environment, designed for natural, friendly exchanges and lighthearted conversations.",
-            "A corner table in a popular downtown coffee shop with exposed brick walls, reclaimed wood furniture, and a chalkboard menu featuring artisan beverages."
-        )
+        intimate_setting = next((s for s in ALL_SETTINGS if s['name'] == "Intimate Setting"), None)
+        if intimate_setting:
+            chat_manager.set_current_setting(
+                intimate_setting['name'],
+                intimate_setting['description'],
+                intimate_setting['start_location']
+            )
+            settings_dropdown.value = intimate_setting['name']
+            settings_dropdown.update()
+        else:
+            logger.error("No setting found and 'Intimate Setting' not available.")
+
+    # Load previously added characters
+    session_chars = chat_manager.db.get_session_characters(session_id)
+    for c_name in session_chars:
+        if c_name in ALL_CHARACTERS:
+            chat_manager.add_character(c_name, ALL_CHARACTERS[c_name])
+            introductions_given[c_name] = False
+        else:
+            logger.warning(f"Character '{c_name}' found in DB but not in ALL_CHARACTERS.")
+
     refresh_added_characters()
     show_chat_display.refresh()
     update_next_speaker_label()
     populate_session_dropdown()
-    # No location history display as requested
     display_current_location()
+    chat_manager.session_id = session_id
     logger.info(f"Session loaded: {session_id}")
 
-
 def select_setting(event):
-    """Handle the event when a setting is selected from the dropdown."""
     chosen_name = event.value
     logger.info(f"Setting selected: {chosen_name}")
     setting = next((s for s in ALL_SETTINGS if s['name'] == chosen_name), None)
@@ -254,6 +250,8 @@ def select_setting(event):
                 setting['description'],
                 setting['start_location']
             )
+            settings_dropdown.value = setting['name']
+            settings_dropdown.update()
             display_current_location()
         except Exception as pe:
             logger.error(f"Error while setting current setting: {pe}")
@@ -261,10 +259,7 @@ def select_setting(event):
     else:
         logger.warning(f"Selected setting '{chosen_name}' not found.")
 
-
 def toggle_automatic_chat(e):
-    """Toggle the automatic chat feature on or off."""
-    global auto_timer
     state = "enabled" if e.value else "disabled"
     logger.info(f"Automatic chat toggled {state}.")
     if e.value:
@@ -291,9 +286,7 @@ def toggle_automatic_chat(e):
     next_button.enabled = not chat_manager.automatic_running
     next_button.update()
 
-
 def set_you_name(_=None):
-    """Set the user's name based on the input field."""
     name = you_name_input.value.strip()
     if name:
         logger.info(f"Setting user name to: {name}")
@@ -302,10 +295,8 @@ def set_you_name(_=None):
     else:
         logger.warning("Attempted to set empty user name.")
 
-
 @ui.refreshable
 def show_chat_display():
-    """Refresh the chat display area with the latest messages."""
     logger.debug("Refreshing chat display.")
     chat_display.clear()
     msgs = chat_manager.db.get_messages(chat_manager.session_id)
@@ -313,7 +304,6 @@ def show_chat_display():
         for entry in msgs:
             name = entry["sender"]
             message = entry["message"]
-            # Use 'created_at' instead of 'timestamp'
             timestamp = entry["created_at"]
             dt = datetime.fromisoformat(timestamp)
             human_timestamp = dt.strftime('%Y-%m-%d %H:%M:%S')
@@ -326,16 +316,15 @@ def show_chat_display():
             ui.markdown(formatted_message)
     logger.debug("Chat display refreshed.")
 
-
 @ui.refreshable
 def display_current_location():
-    """Display the current location."""
-    current_location_label.text = f"Current Location: {chat_manager.current_location}"
+    if chat_manager.current_location:
+        current_location_label.text = f"Current Location: {chat_manager.current_location}"
+    else:
+        current_location_label.text = "Current Location: Not set."
     current_location_label.update()
 
-
 async def automatic_conversation():
-    """Check if automatic conversation should advance the dialogue."""
     if chat_manager.automatic_running:
         logger.debug("Automatic conversation active. Generating next message.")
         next_char = chat_manager.next_speaker()
@@ -343,12 +332,8 @@ async def automatic_conversation():
             await generate_character_message(next_char)
             chat_manager.advance_turn()
             update_next_speaker_label()
-        else:
-            logger.debug("No next character to speak in automatic conversation.")
-
 
 async def next_character_response():
-    """Generate the next character's response manually."""
     if chat_manager.automatic_running:
         logger.debug("Automatic conversation is running. Manual next response ignored.")
         return
@@ -358,18 +343,27 @@ async def next_character_response():
         await generate_character_message(next_char)
         chat_manager.advance_turn()
         update_next_speaker_label()
-    else:
-        logger.debug("No next character to respond.")
-
 
 async def generate_character_introduction_message(character_name: str):
-    """Generate an introduction message for a new character."""
     logger.info(f"Generating introduction message for character: {character_name}")
     (system_prompt, user_prompt) = chat_manager.build_prompt_for_character(character_name)
-    user_prompt += (
-        "\n\nYou have just arrived in the conversation. "
-        "When introducing yourself, provide a very elaborate description of your appearance, including your age, clothing/attire, build, hair color and style, and how you carry yourself. Also convey your behavior and energy. Make it fitting for the setting and the current location."
-    )
+
+    char = chat_manager.characters[character_name]
+    user_prompt += f"""
+
+Introduce yourself. This introduction should set the scene for others. 
+Focus on what can be perceived in the current setting and location. 
+Incorporate the following details:
+- Appearance: {char.appearance}
+- Character/behavior: {char.character_description}
+
+Make it elaborate and fitting for the setting and current location.
+"""
+
+    global llm_busy
+    llm_busy = True
+    llm_busy_label.visible = True
+    llm_busy_label.update()
 
     try:
         interaction = await run.io_bound(llm_client.generate, prompt=user_prompt, system=system_prompt)
@@ -383,6 +377,7 @@ async def generate_character_introduction_message(character_name: str):
                 affect=interaction.affect,
                 purpose=interaction.purpose
             )
+            introductions_given[character_name] = True
             logger.info(f"Introduction message generated for {character_name}.")
         else:
             formatted_message = str(interaction) if interaction else "No introduction."
@@ -392,6 +387,7 @@ async def generate_character_introduction_message(character_name: str):
                 visible=True,
                 message_type="character"
             )
+            introductions_given[character_name] = True
             logger.warning(f"Unexpected interaction type for {character_name}: {interaction}")
     except Exception as e:
         formatted_message = f"Error generating introduction: {str(e)}"
@@ -402,14 +398,34 @@ async def generate_character_introduction_message(character_name: str):
             message_type="character"
         )
         logger.error(f"Error generating introduction for {character_name}: {e}")
+    finally:
+        llm_busy = False
+        llm_busy_label.visible = False
+        llm_busy_label.update()
 
     show_chat_display.refresh()
 
-
 async def generate_character_message(character_name: str):
-    """Generate a message from a character."""
     logger.info(f"Generating message for character: {character_name}")
     (system_prompt, user_prompt) = chat_manager.build_prompt_for_character(character_name)
+
+    # Check if this character has introduced themselves by now
+    # If not, and they have never spoken, produce the introduction first
+    msgs = chat_manager.db.get_messages(chat_manager.session_id)
+    char_spoken_before = any(m for m in msgs if m["sender"] == character_name and m["message_type"] == "character")
+
+    if character_name not in introductions_given:
+        introductions_given[character_name] = False
+
+    if not introductions_given[character_name] and not char_spoken_before:
+        # Produce introduction instead of normal message
+        await generate_character_introduction_message(character_name)
+        return
+
+    global llm_busy
+    llm_busy = True
+    llm_busy_label.visible = True
+    llm_busy_label.update()
 
     try:
         interaction = await run.io_bound(llm_client.generate, prompt=user_prompt, system=system_prompt)
@@ -442,12 +458,14 @@ async def generate_character_message(character_name: str):
             message_type="character"
         )
         logger.error(f"Error generating message for {character_name}: {e}")
+    finally:
+        llm_busy = False
+        llm_busy_label.visible = False
+        llm_busy_label.update()
 
     show_chat_display.refresh()
 
-
 async def send_user_message():
-    """Send the user's message to the chat."""
     message = user_input.value.strip()
     if not message:
         logger.warning("Attempted to send empty user message.")
@@ -467,11 +485,8 @@ async def send_user_message():
     if not chat_manager.automatic_running:
         update_next_speaker_label()
 
-
 async def add_character_from_dropdown(event):
-    """Add a character to the chat based on dropdown selection."""
     if not event.value:
-        logger.warning("No character selected from dropdown.")
         return
     char_name = event.value
     logger.info(f"Adding character from dropdown: {char_name}")
@@ -479,17 +494,13 @@ async def add_character_from_dropdown(event):
     if char:
         if char_name not in chat_manager.get_character_names():
             chat_manager.add_character(char_name, char)
+            chat_manager.db.add_character_to_session(chat_manager.session_id, char_name)
+            introductions_given[char_name] = False
             refresh_added_characters()
             logger.info(f"Character '{char_name}' added to chat.")
 
-            # Check if character has already spoken before introducing
-            msgs = chat_manager.db.get_messages(chat_manager.session_id)
-            previously_spoken = any(m for m in msgs if m["sender"] == char_name)
-            if not previously_spoken:
-                await generate_character_introduction_message(char_name)
-            else:
-                show_chat_display.refresh()
-                logger.debug(f"Character '{char_name}' has already spoken before. No introduction needed.")
+            # Do not generate introduction now. It will be generated when it's their turn.
+            show_chat_display.refresh()
         else:
             logger.warning(f"Character '{char_name}' is already added.")
     else:
@@ -499,135 +510,137 @@ async def add_character_from_dropdown(event):
     character_dropdown.value = None
     character_dropdown.update()
 
-
 def remove_character(name: str):
-    """Remove a character from the chat."""
     logger.info(f"Removing character: {name}")
     chat_manager.remove_character(name)
+    chat_manager.db.remove_character_from_session(chat_manager.session_id, name)
+    if name in introductions_given:
+        del introductions_given[name]
     refresh_added_characters()
     show_chat_display.refresh()
     update_next_speaker_label()
-    logger.debug(f"Character '{name}' removed from chat.")
-
 
 def main_page():
-    """Set up the main UI components of the application."""
     global user_input, you_name_input, character_dropdown, added_characters_container
     global next_speaker_label, next_button, settings_dropdown, session_dropdown, chat_display
-    global current_location_label
+    global current_location_label, llm_busy_label
     global ALL_CHARACTERS, ALL_SETTINGS
 
     logger.debug("Setting up main UI page.")
     ALL_CHARACTERS = get_available_characters(CHARACTERS_DIR)
     ALL_SETTINGS = load_settings()
 
-    with ui.column().classes('w-full max-w-2xl mx-auto'):
-        ui.label('Multipersona Chat Application').classes('text-2xl font-bold mb-4')
+    # Split the layout into two columns: left for settings, right for chat
+    with ui.row().classes('w-full h-screen flex'):
+        with ui.column().classes('w-1/3 p-4 bg-gray-200'):
+            ui.label('Multipersona Chat Application').classes('text-2xl font-bold mb-4')
 
-        # Session Management
-        with ui.row().classes('w-full items-center mb-4'):
-            ui.label("Session:").classes('w-1/4')
-            session_dropdown = ui.select(
-                options=[s['name'] for s in chat_manager.db.get_all_sessions()],
-                label="Choose a session",
-            ).classes('flex-grow')
+            # Session Management
+            with ui.row().classes('w-full items-center mb-4'):
+                ui.label("Session:").classes('w-1/4')
+                session_dropdown = ui.select(
+                    options=[s['name'] for s in chat_manager.db.get_all_sessions()],
+                    label="Choose a session",
+                ).classes('flex-grow')
 
-            ui.button("New Session", on_click=create_new_session).classes('ml-2')
-            ui.button("Delete Session", on_click=delete_session).classes('ml-2 bg-red-500 text-white')
+                ui.button("New Session", on_click=create_new_session).classes('ml-2')
+                ui.button("Delete Session", on_click=delete_session).classes('ml-2 bg-red-500 text-white')
 
-        # Configure "Your Name"
-        with ui.row().classes('w-full items-center mb-4'):
-            ui.label("Your name:").classes('w-1/4')
-            you_name_input = ui.input(value=chat_manager.you_name).classes('flex-grow')
-            ui.button("Set", on_click=set_you_name).classes('ml-2')
+            # Configure "Your Name"
+            with ui.row().classes('w-full items-center mb-4'):
+                ui.label("Your name:").classes('w-1/4')
+                you_name_input = ui.input(value=chat_manager.you_name).classes('flex-grow')
+                ui.button("Set", on_click=set_you_name).classes('ml-2')
 
-        # Select Setting
-        with ui.row().classes('w-full items-center mb-4'):
-            ui.label("Select Setting:").classes('w-1/4')
-            settings_dropdown = ui.select(
-                options=[s['name'] for s in ALL_SETTINGS],
-                on_change=select_setting,
-                label="Choose a setting"
-            ).classes('flex-grow')
+            # Select Setting
+            with ui.row().classes('w-full items-center mb-4'):
+                ui.label("Select Setting:").classes('w-1/4')
+                settings_dropdown = ui.select(
+                    options=[s['name'] for s in ALL_SETTINGS],
+                    on_change=select_setting,
+                    label="Choose a setting"
+                ).classes('flex-grow')
 
-        # Display Current Location
-        with ui.row().classes('w-full items-center mb-2'):
-            ui.label("Current Location:").classes('w-1/4')
-            current_location_label = ui.label(chat_manager.current_location).classes('flex-grow text-gray-700')
+            # Display Current Location
+            with ui.row().classes('w-full items-center mb-2'):
+                ui.label("Current Location:").classes('w-1/4')
+                current_location_label = ui.label(
+                    chat_manager.current_location if chat_manager.current_location else "Not set."
+                ).classes('flex-grow text-gray-700')
 
-        # Note: Location history and input for changing location removed as requested.
+            # Add Characters
+            with ui.row().classes('w-full items-center mb-4'):
+                ui.label("Select Character:").classes('w-1/4')
+                character_dropdown = ui.select(
+                    options=list(ALL_CHARACTERS.keys()),
+                    on_change=lambda e: asyncio.create_task(add_character_from_dropdown(e)),
+                    label="Choose a character"
+                ).classes('flex-grow')
 
-        # Add Characters Dropdown
-        with ui.row().classes('w-full items-center mb-4'):
-            ui.label("Select Character:").classes('w-1/4')
-            character_dropdown = ui.select(
-                options=list(ALL_CHARACTERS.keys()),
-                on_change=lambda e: asyncio.create_task(add_character_from_dropdown(e)),
-                label="Choose a character"
-            ).classes('flex-grow')
+            # List of Added Characters
+            with ui.column().classes('w-full mb-4'):
+                ui.label("Added Characters:").classes('font-semibold mb-2')
+                added_characters_container = ui.row().classes('flex-wrap gap-2')
+                refresh_added_characters()
 
-        # List of Added Characters
-        with ui.column().classes('w-full mb-4'):
-            ui.label("Added Characters:").classes('font-semibold mb-2')
-            added_characters_container = ui.row().classes('flex-wrap gap-2')
-            refresh_added_characters()
+            # Toggle Automatic Chat
+            with ui.row().classes('w-full items-center mb-4'):
+                auto_switch = ui.switch('Automatic Chat', value=False, on_change=toggle_automatic_chat).classes('mr-2')
+                ui.button("Stop", on_click=lambda: chat_manager.stop_automatic_chat()).classes('ml-auto')
 
-        # Toggle Automatic Chat
-        with ui.row().classes('w-full items-center mb-4'):
-            auto_switch = ui.switch('Automatic Chat', value=False, on_change=toggle_automatic_chat).classes('mr-2')
-            ui.button("Stop", on_click=lambda: chat_manager.stop_automatic_chat()).classes('ml-auto')
+            # Next Speaker Label
+            next_speaker_label = ui.label("Next speaker:").classes('text-sm text-gray-700')
+            update_next_speaker_label()
 
-        # Next Speaker Label
-        next_speaker_label = ui.label("Next speaker:").classes('text-sm text-gray-700')
-        update_next_speaker_label()
+            # Next Button
+            next_button = ui.button("Next", on_click=lambda: asyncio.create_task(next_character_response()))
+            next_button.props('outline')
+            next_button.enabled = not chat_manager.automatic_running
+            next_button.update()
 
-        # Next Button (for manual progression)
-        next_button = ui.button("Next", on_click=lambda: asyncio.create_task(next_character_response()))
-        next_button.props('outline')
-        next_button.enabled = not chat_manager.automatic_running
-        next_button.update()
+            # Busy indicator
+            llm_busy_label = ui.label("LLM is busy...").classes('text-red-500')
+            llm_busy_label.visible = False
 
-        # Chat Display
-        chat_display = ui.column().classes('space-y-2 p-4 bg-gray-100 rounded h-96 overflow-y-auto')
-        show_chat_display()
+        with ui.column().classes('w-2/3 p-4 bg-white'):
+            # Chat Display
+            chat_display = ui.column().classes('space-y-2 p-4 bg-gray-100 rounded h-3/4 overflow-y-auto')
+            show_chat_display()
 
-        # User Input Field and Send Button
-        with ui.row().classes('w-full items-center mt-4'):
-            user_input = ui.input(placeholder='Enter your message...').classes('flex-grow')
-            ui.button('Send', on_click=lambda: asyncio.create_task(send_user_message())).classes('ml-2')
+            # User Input
+            with ui.row().classes('w-full items-center mt-4'):
+                user_input = ui.input(placeholder='Enter your message...').classes('flex-grow')
+                ui.button('Send', on_click=lambda: asyncio.create_task(send_user_message())).classes('ml-2')
 
-        # Assign the on_change handler and set the default session value
         session_dropdown.on('change', on_session_select)
-        session_dropdown.value = chat_manager.get_session_name()  # Set default selected session
-        logger.debug("Main UI page setup complete.")
+        session_dropdown.value = chat_manager.get_session_name()
+        session_dropdown.update()
 
+    logger.debug("Main UI page setup complete.")
 
 def start_ui():
-    """Initialize the application and start the UI."""
     logger.info("Starting UI initialization.")
     default_session = str(uuid.uuid4())
     settings = load_settings()
     init_chat_manager(default_session, settings)
 
-    main_page()  # Initialize the UI components before loading the session
+    main_page()
 
     sessions = chat_manager.db.get_all_sessions()
     if not sessions:
         logger.info("No existing sessions found. Creating default session.")
         chat_manager.db.create_session(default_session, f"Session {default_session}")
-        default_setting = next((s for s in settings if s['name'] == "Default Setting"), None)
-        if default_setting:
+        intimate_setting = next((s for s in settings if s['name'] == "Intimate Setting"), None)
+        if intimate_setting:
             chat_manager.set_current_setting(
-                default_setting['name'],
-                default_setting['description'],
-                default_setting['start_location']
+                intimate_setting['name'],
+                intimate_setting['description'],
+                intimate_setting['start_location']
             )
+            settings_dropdown.value = intimate_setting['name']
+            settings_dropdown.update()
         else:
-            chat_manager.set_current_setting(
-                "Default Setting",
-                "A lively and sociable coffeehouse environment, designed for natural, friendly exchanges and lighthearted conversations.",
-                "A corner table in a popular downtown coffee shop with exposed brick walls, reclaimed wood furniture, and a chalkboard menu featuring artisan beverages."
-            )
+            logger.error("'Intimate Setting' not found. Cannot set a default setting.")
         load_session(default_session)
     else:
         first_session = sessions[0]
@@ -640,10 +653,3 @@ def start_ui():
 
     ui.run(reload=False)
     logger.info("UI is running.")
-
-
-if __name__ == "__main__":
-    try:
-        start_ui()
-    except Exception as e:
-        logger.critical(f"Application crashed with exception: {e}", exc_info=True)
