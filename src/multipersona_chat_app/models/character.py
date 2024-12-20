@@ -1,3 +1,4 @@
+# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/models/character.py
 from pydantic import BaseModel
 import yaml
 from templates import DEFAULT_PROMPT_TEMPLATE
@@ -31,11 +32,36 @@ class Character(BaseModel):
         )
 
     def format_prompt(self, setting: str, chat_history_summary: str, latest_dialogue: str, name: str, location: str) -> str:
-        """Format the prompt template with given variables."""
-        return self.prompt_template.format(
-            setting=setting,
-            chat_history_summary=chat_history_summary,
-            latest_dialogue=latest_dialogue,
+        """Format the prompt template with given variables, removing irrelevant headings if data is missing."""
+
+        # Helper to handle optional sections
+        # If data is present, show with heading. If not, mention its unavailability without a heading.
+        def optional_section(title: str, content: str):
+            content = content.strip()
+            if content:
+                return f"### {title} ###\n{content}\n\n"
+            else:
+                return f"No {title.lower()} data available.\n\n"
+
+        # Format each section
+        setting_section = optional_section("Setting", setting)
+        location_section = optional_section("Current Location", location)
+        history_section = optional_section("Chat History Summary", chat_history_summary)
+        dialogue_section = optional_section("Latest Dialogue", latest_dialogue)
+
+        # If no data is available for a section, we get a line stating that it's not available.
+        # This ensures clarity that the information is simply not present at this time.
+
+        # Insert the formatted sections into the prompt template
+        # We replace the placeholders in the template with the processed strings.
+        # The template originally expected headings, but we now provide the processed strings directly.
+        # We rely on our optional_section function to handle whether to display headings or not.
+        prompt = self.prompt_template.format(
+            setting=setting_section.strip(),
+            chat_history_summary=history_section.strip(),
+            latest_dialogue=dialogue_section.strip(),
             name=name,
-            location=location
+            location=location_section.strip()
         )
+
+        return prompt

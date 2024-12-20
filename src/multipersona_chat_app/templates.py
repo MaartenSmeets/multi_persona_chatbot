@@ -3,16 +3,14 @@ This module provides templates for system prompts, user prompts, and introductio
 """
 
 DEFAULT_PROMPT_TEMPLATE = r"""
-    ### Setting ###
+    ### Context for Current Interaction ###
+    
     {setting}
 
-    ### Current Location ###
     {location}
 
-    ### Chat History Summary ###
     {chat_history_summary}
 
-    ### Latest Dialogue ###
     {latest_dialogue}
 
     ### Instructions ###
