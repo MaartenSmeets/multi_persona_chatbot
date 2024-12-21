@@ -4,10 +4,43 @@ from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
+def merge_location_update(old_location: str, new_location: str) -> str:
+    """
+    Merges a character's old location with the new location details.
+    By default, if we detect certain triggers that imply a major move
+    or new place (e.g., 'goes to', 'private room', 'change clothes'),
+    we treat it as a full replacement. Otherwise, we append.
+    This can be adjusted for more nuanced or advanced logic.
+    """
+    if not new_location.strip():
+        # If the new_location text is empty, return old unchanged
+        return old_location
+
+    if not old_location.strip():
+        # If the character had no prior location set, just use the new one
+        return new_location
+
+    # Simple triggers that imply a fresh location
+    triggers = [
+        "change clothes", "heads to", "walks to", "goes to", "arrives at",
+        "moves from", "moves to", "exits", "enters", "private room", "return to"
+    ]
+    lowered_new = new_location.lower()
+
+    if any(trigger in lowered_new for trigger in triggers):
+        # Treat it as a new environment, so replace
+        return new_location
+    else:
+        # Otherwise, we append the details. You can change the delimiter as desired.
+        return f"{old_location} -> {new_location}"
+
 class DBManager:
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._initialize_database()
+
+    def _ensure_connection(self) -> sqlite3.Connection:
+        return sqlite3.connect(self.db_path)
 
     def _initialize_database(self):
         conn = self._ensure_connection()
@@ -59,20 +92,19 @@ class DBManager:
                 FOREIGN KEY(triggered_by_message_id) REFERENCES messages(id)
             )
         ''')
-        # Create session_characters table
+        # Create or alter session_characters table to include current_location
         c.execute('''
             CREATE TABLE IF NOT EXISTS session_characters (
                 session_id TEXT NOT NULL,
                 character_name TEXT NOT NULL,
-                FOREIGN KEY(session_id) REFERENCES sessions(session_id)
+                current_location TEXT,
+                FOREIGN KEY(session_id) REFERENCES sessions(session_id),
+                PRIMARY KEY (session_id, character_name)
             )
         ''')
         conn.commit()
         conn.close()
-        logger.info("Database initialized successfully with all required tables.")
-
-    def _ensure_connection(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.db_path)
+        logger.info("Database initialized with required tables (including character-specific location).")
 
     # Session Management
     def create_session(self, session_id: str, name: str):
@@ -130,31 +162,40 @@ class DBManager:
         logger.info(f"Session '{session_id}' updated with new setting '{setting_name}'.")
 
     def get_current_location(self, session_id: str) -> Optional[str]:
+        """
+        Returns the session-level (global) location if any.
+        Each character can have their own location, but this is
+        still stored for backward compatibility or a general 'scene' location.
+        """
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('SELECT current_location FROM sessions WHERE session_id = ?', (session_id,))
         row = c.fetchone()
         conn.close()
         if row and row[0]:
-            logger.debug(f"Current location for session '{session_id}': {row[0]}")
+            logger.debug(f"Current location (session-wide) for session '{session_id}': {row[0]}")
             return row[0]
-        logger.warning(f"No current location found for session '{session_id}'.")
         return None
 
     def update_current_location(self, session_id: str, location: str, triggered_by_message_id: Optional[int] = None):
+        """
+        Updates the session-level location. Characters still have individual locations,
+        but some UIs or logic may want an overall 'scene location'.
+        """
         conn = self._ensure_connection()
         c = conn.cursor()
-        # Always update current_location in sessions
+        # Update 'current_location' on sessions table
         c.execute('UPDATE sessions SET current_location = ? WHERE session_id = ?', (location, session_id))
-        # Only record location history if triggered by a message
+        # Optionally record location history:
         if triggered_by_message_id is not None:
-            c.execute('INSERT INTO location_history (session_id, location, triggered_by_message_id) VALUES (?, ?, ?)', (session_id, location, triggered_by_message_id))
+            c.execute('INSERT INTO location_history (session_id, location, triggered_by_message_id) VALUES (?, ?, ?)', 
+                      (session_id, location, triggered_by_message_id))
         conn.commit()
         conn.close()
         if triggered_by_message_id:
-            logger.info(f"Session '{session_id}' location updated to '{location}' by message ID {triggered_by_message_id}.")
+            logger.info(f"Global location for session '{session_id}' updated to '{location}' (by message ID={triggered_by_message_id}).")
         else:
-            logger.info(f"Session '{session_id}' current location updated internally (no history recorded).")
+            logger.info(f"Global location for session '{session_id}' updated to '{location}' with no trigger message.")
 
     def get_location_history(self, session_id: str) -> List[Dict[str, Any]]:
         conn = self._ensure_connection()
@@ -177,14 +218,22 @@ class DBManager:
         logger.debug(f"Retrieved {len(history)} location history entries for session '{session_id}'.")
         return history
 
-    # Session Characters
-    def add_character_to_session(self, session_id: str, character_name: str):
+    # Character location management
+    def add_character_to_session(self, session_id: str, character_name: str, initial_location: str = ""):
+        """
+        Ensure the character is in this session. If not, insert with the given initial_location.
+        """
         conn = self._ensure_connection()
         c = conn.cursor()
-        c.execute('INSERT INTO session_characters (session_id, character_name) VALUES (?, ?)', (session_id, character_name))
+        c.execute('''
+            INSERT OR IGNORE INTO session_characters (session_id, character_name, current_location)
+            VALUES (?, ?, ?)
+        ''', (session_id, character_name, initial_location))
         conn.commit()
         conn.close()
-        logger.debug(f"Added character '{character_name}' to session '{session_id}'.")
+        logger.debug(
+            f"Added character '{character_name}' to session '{session_id}' with initial location: '{initial_location}'."
+        )
 
     def remove_character_from_session(self, session_id: str, character_name: str):
         conn = self._ensure_connection()
@@ -204,8 +253,73 @@ class DBManager:
         logger.debug(f"Retrieved {len(chars)} characters for session '{session_id}'.")
         return chars
 
+    def get_character_location(self, session_id: str, character_name: str) -> Optional[str]:
+        """
+        Retrieve the personal location of a specific character in this session.
+        """
+        conn = self._ensure_connection()
+        c = conn.cursor()
+        c.execute('''
+            SELECT current_location
+            FROM session_characters
+            WHERE session_id = ? AND character_name = ?
+        ''', (session_id, character_name))
+        row = c.fetchone()
+        conn.close()
+        if row and row[0]:
+            return row[0]
+        return ""
+
+    def get_all_character_locations(self, session_id: str) -> Dict[str, str]:
+        """
+        Return a dict: {character_name: current_location or ""}
+        """
+        conn = self._ensure_connection()
+        c = conn.cursor()
+        c.execute('''
+            SELECT character_name, current_location
+            FROM session_characters
+            WHERE session_id = ?
+        ''', (session_id,))
+        rows = c.fetchall()
+        conn.close()
+        return {row[0]: (row[1] if row[1] else "") for row in rows}
+
+    def update_character_location(self, session_id: str, character_name: str, new_location: str, triggered_by_message_id: Optional[int] = None):
+        """
+        Update this character's personal location. By default, merges old location
+        with new location details unless the new_location text indicates a major move.
+        """
+        old_location = self.get_character_location(session_id, character_name)
+        updated_location = merge_location_update(old_location, new_location)
+
+        conn = self._ensure_connection()
+        c = conn.cursor()
+        c.execute('''
+            UPDATE session_characters
+            SET current_location = ?
+            WHERE session_id = ? AND character_name = ?
+        ''', (updated_location, session_id, character_name))
+        conn.commit()
+        conn.close()
+
+        logger.info(
+            f"Updated location of character '{character_name}' in session '{session_id}' "
+            f"from '{old_location}' to '{updated_location}'."
+        )
+
+        # Optionally record these per-character location changes in location_history (or a new table).
+        if triggered_by_message_id:
+            conn = self._ensure_connection()
+            c = conn.cursor()
+            c.execute('INSERT INTO location_history (session_id, location, triggered_by_message_id) VALUES (?, ?, ?)',
+                      (session_id, f"{character_name} is now {updated_location}", triggered_by_message_id))
+            conn.commit()
+            conn.close()
+
     # Messages
-    def save_message(self, session_id: str, sender: str, message: str, visible: bool = True, message_type: str = "user", affect: Optional[str]=None, purpose: Optional[str]=None) -> int:
+    def save_message(self, session_id: str, sender: str, message: str, visible: bool = True, message_type: str = "user",
+                     affect: Optional[str]=None, purpose: Optional[str]=None) -> int:
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
@@ -254,7 +368,10 @@ class DBManager:
         ''', (session_id, character_name, summary, covered_up_to_message_id))
         conn.commit()
         conn.close()
-        logger.debug(f"Summary saved for character '{character_name}' in session '{session_id}' up to message ID {covered_up_to_message_id}.")
+        logger.debug(
+            f"Summary saved for character '{character_name}' in session '{session_id}' "
+            f"up to message ID {covered_up_to_message_id}."
+        )
 
     def get_all_summaries(self, session_id: str, character_name: str) -> List[str]:
         conn = self._ensure_connection()
