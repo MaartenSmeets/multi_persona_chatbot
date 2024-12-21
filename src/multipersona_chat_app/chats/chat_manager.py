@@ -143,6 +143,7 @@ class ChatManager:
     def build_prompt_for_character(self, character_name: str) -> Tuple[str, str]:
         """
         Build the system prompt + user prompt for normal, JSON-structured conversation.
+        This method references all characters who have participated in the chat.
         """
         visible_history = self.get_visible_history()
         latest_dialogue = visible_history[-1][1] if visible_history else ""
@@ -154,7 +155,9 @@ class ChatManager:
         else:
             setting_description = "A tranquil environment."
 
+        # Here we include the location for *all* participants who have spoken:
         location = self.get_combined_location()
+
         char = self.characters[character_name]
 
         # Load morality guidelines
@@ -187,7 +190,8 @@ class ChatManager:
     def build_introduction_prompts_for_character(self, character_name: str) -> Tuple[str, str]:
         """
         Build the system prompt + user prompt specifically for an unstructured introduction.
-        Incorporates the setting, location, recent history, and latest dialogue into the intro.
+        Only the *current session/location* is used—other characters who haven't participated
+        are excluded here to avoid referencing them before they've been introduced.
         """
         char = self.characters[character_name]
 
@@ -202,7 +206,11 @@ class ChatManager:
         else:
             setting_description = "A tranquil environment."
 
-        location = self.get_combined_location()
+        # For the introduction, use only the session's current location or the default start location
+        # — do not mention other characters to avoid referencing them prematurely.
+        session_loc = self.db.get_current_location(self.session_id) or ""
+        if not session_loc and self.current_setting in self.settings:
+            session_loc = self.settings[self.current_setting].get('start_location', '')
 
         # Load morality guidelines
         morality_config_path = os.path.join("src", "multipersona_chat_app", "config", "morality_guidelines.yaml")
@@ -229,26 +237,60 @@ class ChatManager:
             appearance=char.appearance,
             character_description=char.character_description,
             setting=setting_description,
-            location=location,
+            location=session_loc,  # Do NOT use combined location here
             chat_history_summary=chat_history_summary,
             latest_dialogue=latest_dialogue
         )
 
-        # This is just a plain text prompt for the introduction
         user_prompt = intro_prompt
 
         return system_prompt, user_prompt
 
     def get_combined_location(self) -> str:
+        """
+        Return a string describing only the locations of characters who have actually
+        participated (sent at least one user- or character-type message). Skips mention
+        of unintroduced characters. Improves the phrasing so it reads “X is at <location>.”
+        """
         char_locs = self.db.get_all_character_locations(self.session_id)
-        if not char_locs:
-            return "No characters are present, so the exact location is unclear."
+        msgs = self.db.get_messages(self.session_id)
+        # Determine which characters have participated:
+        participants = set(
+            m["sender"] for m in msgs 
+            if m["message_type"] in ["user", "character"]
+        )
+
+        # If no participants, we default to the session location or a fallback text
+        if not participants:
+            session_loc = self.db.get_current_location(self.session_id)
+            if not session_loc and self.current_setting in self.settings:
+                session_loc = self.settings[self.current_setting].get('start_location', '')
+            if session_loc:
+                return f"The setting is: {session_loc}"
+            else:
+                return "No characters present and no specific location known."
+
         parts = []
         for c_name, loc in char_locs.items():
+            if c_name not in participants:
+                # Skip unintroduced/unparticipated characters
+                continue
             if loc.strip():
-                parts.append(f"{c_name} is {loc}")
+                parts.append(f"{c_name} is at {loc}")
             else:
                 parts.append(f"{c_name}'s location is unknown")
+
+        if not parts:
+            # If no introduced character has a location, revert to session location or fallback
+            session_loc = self.db.get_current_location(self.session_id)
+            if not session_loc and self.current_setting in self.settings:
+                session_loc = self.settings[self.current_setting].get('start_location', '')
+            if session_loc:
+                return f"The setting is: {session_loc}"
+            else:
+                return "No active character locations known."
+
+        # Join the partial statements with " | " for clarity.
         return " | ".join(parts)
 
     def start_automatic_chat(self):
