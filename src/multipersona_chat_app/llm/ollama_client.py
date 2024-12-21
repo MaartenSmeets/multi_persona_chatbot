@@ -1,3 +1,5 @@
+# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/llm/ollama_client.py
+
 import requests
 import logging
 from typing import Optional, Type
@@ -41,7 +43,7 @@ class OllamaClient:
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         system: Optional[str] = None
-    ) -> Optional[BaseModel]:
+    ) -> Optional[BaseModel or str]:
         model_name = self.config.get('model_name')
 
         # Check cache first
@@ -52,10 +54,11 @@ class OllamaClient:
                 try:
                     return self.output_model.parse_raw(cached_response)
                 except:
-                    # CHANGED: On parse error, consider it an error, return None
                     logger.error("Error parsing cached response. Treating as invalid and returning None.")
                     return None
-            return None  # If no model, no guarantee this is good data, return None
+            else:
+                # For unstructured responses, return the cached string as-is
+                return cached_response
 
         headers = {
             'Content-Type': 'application/json',
@@ -76,8 +79,8 @@ class OllamaClient:
         if system:
             payload['system'] = system
 
+        # Only add format if we have an output model expecting JSON
         if self.output_model:
-            # If model output format needed
             payload['format'] = self.output_model.model_json_schema()
 
         max_retries = self.config.get('max_retries', 3)
@@ -98,7 +101,7 @@ class OllamaClient:
                     headers=headers,
                     json=payload,
                     stream=True,
-                    timeout=self.config.get('timeout', 300)  # ADDED: Ensure we respect timeout from config
+                    timeout=self.config.get('timeout', 300)
                 ) as response:
                     logger.info(f"Received response with status code: {response.status_code}")
                     logger.info(f"Response Headers: {response.headers}")
@@ -124,23 +127,21 @@ class OllamaClient:
                         output += content
 
                         if data.get("done", False):
-                            # Attempt to parse
+                            # If we have an output model, parse it as structured data
                             if self.output_model:
                                 try:
                                     parsed_output = self.output_model.parse_raw(output)
-                                    # Only cache if parsed successfully
                                     self.cache_manager.store_response(prompt, model_name, output)
-                                    logger.info(f"Final parsed output: {parsed_output}")
+                                    logger.info(f"Final parsed output (structured) stored in cache.")
                                     return parsed_output
                                 except Exception as e:
                                     logger.error(f"Error parsing model output: {e}")
-                                    # CHANGED: On parsing error, consider it an error, return None without caching
                                     return None
                             else:
-                                # Without output model, we cannot guarantee correctness,
-                                # CHANGED: treat as error scenario
-                                logger.warning("No output_model provided; returning None.")
-                                return None
+                                # Unstructured text: store in cache, then return as string
+                                self.cache_manager.store_response(prompt, model_name, output)
+                                logger.info("Final unstructured output stored in cache.")
+                                return output
 
                     logger.error("No 'done' signal received before the stream ended.")
                     return None
@@ -148,10 +149,9 @@ class OllamaClient:
                 logger.warning(f"Attempt {attempt} failed: {e}")
                 if attempt == max_retries:
                     logger.error(f"All {max_retries} attempts failed. Giving up.")
-                    return None  # CHANGED: Return None on final failure
+                    return None
                 else:
                     logger.info(f"Retrying... (Attempt {attempt + 1} of {max_retries})")
             except Exception as e:
                 logger.error(f"An error occurred: {e}")
-                # CHANGED: Return None on error instead of raising, to indicate no usable result
                 return None

@@ -1,3 +1,5 @@
+# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/ui/app.py
+
 import os
 import uuid
 import asyncio
@@ -15,7 +17,7 @@ from utils import load_settings, get_available_characters
 logger = logging.getLogger(__name__)
 
 llm_client = None
-introduction_llm_client = None  # New client for introductions
+introduction_llm_client = None  # Dedicated for intros
 chat_manager = None
 
 user_input = None
@@ -45,14 +47,16 @@ def init_chat_manager(session_id: str, settings: List[Dict]):
     logger.debug(f"Initializing ChatManager with session_id: {session_id}")
     chat_manager = ChatManager(you_name="You", session_id=session_id, settings=settings)
     try:
+        # Normal conversation client (expects structured JSON -> Interaction model)
         llm_client = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml', output_model=Interaction)
-        logger.info("LLM Client initialized successfully.")
+        logger.info("LLM Client initialized successfully (structured).")
     except Exception as e:
         logger.error(f"Error initializing LLM Client: {e}")
 
     try:
-        introduction_llm_client = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml')
-        logger.info("Introduction LLM Client initialized successfully.")
+        # Introduction client (unstructured, no output model)
+        introduction_llm_client = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml', output_model=None)
+        logger.info("Introduction LLM Client initialized successfully (unstructured).")
     except Exception as e:
         logger.error(f"Error initializing Introduction LLM Client: {e}")
 
@@ -145,7 +149,6 @@ def delete_session(_):
                     logger.info(f"Loading remaining session: {new_session['name']} with ID: {new_session['session_id']}")
                     load_session(new_session['session_id'])
                 else:
-                    # Create a new default session if none remain
                     new_id = str(uuid.uuid4())
                     new_session_name = f"Session {new_id}"
                     chat_manager.db.create_session(new_id, new_session_name)
@@ -314,11 +317,9 @@ async def next_character_response():
 
 async def generate_character_introduction_message(character_name: str):
     logger.info(f"Generating introduction message for character: {character_name}")
-    (system_prompt, user_prompt) = chat_manager.build_prompt_for_character(character_name)
 
-    introduction_template = chat_manager.get_introduction_template().replace("{name}", character_name)
-
-    user_prompt += f"\n\n{introduction_template}"
+    # BUILD THE SEPARATE, UNSTRUCTURED INTRO PROMPTS:
+    (system_prompt, introduction_prompt) = chat_manager.build_introduction_prompts_for_character(character_name)
 
     global llm_busy
     llm_busy = True
@@ -326,23 +327,21 @@ async def generate_character_introduction_message(character_name: str):
     llm_busy_label.update()
 
     try:
-        # Use the introduction_llm_client which does not expect a structured response
-        introduction_response = await run.io_bound(introduction_llm_client.generate, prompt=user_prompt, system=system_prompt)
+        introduction_response = await run.io_bound(
+            introduction_llm_client.generate,
+            prompt=introduction_prompt,
+            system=system_prompt
+        )
+        # introduction_response will be a raw string or None
         if isinstance(introduction_response, str) and introduction_response.strip():
-            formatted_message = f"{introduction_response.strip()}"
-            msg_id = chat_manager.add_message(
+            formatted_message = introduction_response.strip()
+            chat_manager.add_message(
                 character_name,
                 formatted_message,
                 visible=True,
                 message_type="character",
-                affect=None,  # Affect can be extracted if needed
-                purpose=None  # Purpose can be extracted if needed
             )
             introductions_given[character_name] = True
-
-            # Optionally handle new_location if applicable
-            # This assumes the introduction might contain location changes in free text
-            # Additional parsing can be implemented if needed
             logger.info(f"Introduction message generated for {character_name}.")
         else:
             logger.warning(f"Invalid or no response received for introduction of {character_name}. Not storing.")
@@ -357,8 +356,6 @@ async def generate_character_introduction_message(character_name: str):
 
 async def generate_character_message(character_name: str):
     logger.info(f"Generating message for character: {character_name}")
-    (system_prompt, user_prompt) = chat_manager.build_prompt_for_character(character_name)
-
     # Check if this character has introduced themselves
     msgs = chat_manager.db.get_messages(chat_manager.session_id)
     char_spoken_before = any(m for m in msgs if m["sender"] == character_name and m["message_type"] == "character")
@@ -366,10 +363,12 @@ async def generate_character_message(character_name: str):
     if character_name not in introductions_given:
         introductions_given[character_name] = False
 
+    # If not introduced yet, do the introduction
     if not introductions_given[character_name] and not char_spoken_before:
-        # Produce introduction instead of normal message
         await generate_character_introduction_message(character_name)
         return
+
+    (system_prompt, user_prompt) = chat_manager.build_prompt_for_character(character_name)
 
     global llm_busy
     llm_busy = True
@@ -377,10 +376,16 @@ async def generate_character_message(character_name: str):
     llm_busy_label.update()
 
     try:
-        interaction = await run.io_bound(llm_client.generate, prompt=user_prompt, system=system_prompt)
+        interaction = await run.io_bound(
+            llm_client.generate,
+            prompt=user_prompt,
+            system=system_prompt
+        )
         if isinstance(interaction, Interaction):
-            # Check fields to ensure we got 'good' data
-            if (not interaction.purpose.strip() or not interaction.affect.strip() or not interaction.action.strip()):
+            # Validate the structured fields
+            if (not interaction.purpose.strip()
+                or not interaction.affect.strip()
+                or not interaction.action.strip()):
                 logger.warning("Received incomplete interaction fields. Not storing message.")
             else:
                 formatted_message = f"*{interaction.action}*\n{interaction.dialogue}"
@@ -392,11 +397,8 @@ async def generate_character_message(character_name: str):
                     affect=interaction.affect,
                     purpose=interaction.purpose
                 )
-                
-                # ADDED: If the interaction indicates a location change, apply it
                 if interaction.new_location.strip():
-                    chat_manager.set_current_location(interaction.new_location, triggered_by_message_id=msg_id)
-
+                    await chat_manager.handle_new_location_for_character(character_name, interaction.new_location, msg_id)
                 logger.debug(f"Message generated for {character_name}: {interaction.dialogue}")
         else:
             logger.warning(f"No valid interaction or no response for {character_name}. Not storing.")

@@ -89,17 +89,11 @@ class ChatManager:
 
     @property
     def current_location(self) -> Optional[str]:
-        """
-        Returns the session-level 'current_location' from the DB.
-        This is for backward compatibility with parts of the UI that
-        still reference 'chat_manager.current_location'.
-        """
         return self.db.get_current_location(self.session_id)
     
     def set_current_setting(self, setting_name: str, setting_description: str, start_location: str):
         self.current_setting = setting_name
         self.db.update_current_setting(self.session_id, self.current_setting)
-        # We can store an overall "session-level" location for reference
         self.db.update_current_location(self.session_id, start_location, None)
         logger.info(f"Setting changed to '{self.current_setting}'. (Global location updated for reference.)")
 
@@ -110,16 +104,11 @@ class ChatManager:
         self.you_name = name
 
     def add_character(self, char_name: str, char_instance: Character):
-        """Add a character to the chat and ensure they start at the current (or start) location."""
         self.characters[char_name] = char_instance
-
-        # If there's no stored session location yet, use the setting's start location
         current_session_loc = self.db.get_current_location(self.session_id)
         if not current_session_loc:
             if self.current_setting and self.current_setting in self.settings:
                 current_session_loc = self.settings[self.current_setting]['start_location']
-
-        # Add this character to the session_characters table with the current (or start) location
         self.db.add_character_to_session(self.session_id, char_name, current_session_loc or "")
 
     def remove_character(self, char_name: str):
@@ -138,7 +127,8 @@ class ChatManager:
         if chars:
             self.turn_index = (self.turn_index + 1) % len(chars)
 
-    def add_message(self, sender: str, message: str, visible: bool = True, message_type: str = "user", affect: Optional[str]=None, purpose: Optional[str]=None) -> Optional[int]:
+    def add_message(self, sender: str, message: str, visible: bool = True, message_type: str = "user",
+                    affect: Optional[str]=None, purpose: Optional[str]=None) -> Optional[int]:
         if message_type == "system" or message.strip() == "...":
             return None
         message_id = self.db.save_message(self.session_id, sender, message, visible, message_type, affect, purpose)
@@ -151,20 +141,20 @@ class ChatManager:
                 for m in msgs if m["visible"]]
 
     def build_prompt_for_character(self, character_name: str) -> Tuple[str, str]:
+        """
+        Build the system prompt + user prompt for normal, JSON-structured conversation.
+        """
         visible_history = self.get_visible_history()
         latest_dialogue = visible_history[-1][1] if visible_history else ""
         all_summaries = self.db.get_all_summaries(self.session_id, character_name)
         chat_history_summary = "\n\n".join(all_summaries) if all_summaries else ""
 
-        # Pull the setting
         if self.current_setting and self.current_setting in self.settings:
             setting_description = self.settings[self.current_setting]['description']
         else:
             setting_description = "A tranquil environment."
 
-        # Build a combined location string from all characters' personal locations
         location = self.get_combined_location()
-
         char = self.characters[character_name]
 
         # Load morality guidelines
@@ -178,7 +168,6 @@ class ChatManager:
             logger.error(f"Failed to load morality guidelines: {e}")
             morality_guidelines = ""
 
-        # Combine into system prompt
         system_prompt = (
             f"{char.system_prompt_template}\n\n"
             f"Appearance: {char.appearance}\n"
@@ -186,7 +175,6 @@ class ChatManager:
             f"Guidelines: {morality_guidelines}\n\n"
         )
 
-        # The actual user prompt
         user_prompt = char.format_prompt(
             setting=setting_description,
             chat_history_summary=chat_history_summary,
@@ -196,12 +184,62 @@ class ChatManager:
         )
         return (system_prompt, user_prompt)
 
+    def build_introduction_prompts_for_character(self, character_name: str) -> Tuple[str, str]:
+        """
+        Build the system prompt + user prompt specifically for an unstructured introduction.
+        Incorporates the setting, location, recent history, and latest dialogue into the intro.
+        """
+        char = self.characters[character_name]
+
+        # Gather context to feed into the introduction
+        visible_history = self.get_visible_history()
+        latest_dialogue = visible_history[-1][1] if visible_history else ""
+        all_summaries = self.db.get_all_summaries(self.session_id, character_name)
+        chat_history_summary = "\n\n".join(all_summaries) if all_summaries else ""
+
+        if self.current_setting and self.current_setting in self.settings:
+            setting_description = self.settings[self.current_setting]['description']
+        else:
+            setting_description = "A tranquil environment."
+
+        location = self.get_combined_location()
+
+        # Load morality guidelines
+        morality_config_path = os.path.join("src", "multipersona_chat_app", "config", "morality_guidelines.yaml")
+        try:
+            with open(morality_config_path, 'r') as f:
+                morality_data = yaml.safe_load(f)
+                morality_guidelines_template = morality_data.get('morality_guidelines', "")
+                morality_guidelines = morality_guidelines_template.replace("{name}", char.name)
+        except Exception as e:
+            logger.error(f"Failed to load morality guidelines for introduction: {e}")
+            morality_guidelines = ""
+
+        # System prompt remains minimal but consistent with the character's overall instructions
+        system_prompt = (
+            f"{char.system_prompt_template}\n\n"
+            f"Appearance: {char.appearance}\n"
+            f"Character Description: {char.character_description}\n"
+            f"Guidelines: {morality_guidelines}\n\n"
+        )
+
+        # Format the introduction template with the context
+        intro_prompt = INTRODUCTION_TEMPLATE.format(
+            name=char.name,
+            appearance=char.appearance,
+            character_description=char.character_description,
+            setting=setting_description,
+            location=location,
+            chat_history_summary=chat_history_summary,
+            latest_dialogue=latest_dialogue
+        )
+
+        # This is just a plain text prompt for the introduction
+        user_prompt = intro_prompt
+
+        return system_prompt, user_prompt
+
     def get_combined_location(self) -> str:
-        """
-        Build a combined location string from all characters' personal locations.
-        E.g.: "Maika is in the hot springs | Kael is on a bench next to the spring"
-        If no characters or no locations, fallback to a suitable string.
-        """
         char_locs = self.db.get_all_character_locations(self.session_id)
         if not char_locs:
             return "No characters are present, so the exact location is unclear."
@@ -290,11 +328,6 @@ New events for {character_name} to summarize:
         return INTRODUCTION_TEMPLATE
 
     async def handle_new_location_for_character(self, character_name: str, new_location: str, triggered_message_id: int):
-        """
-        Update the DB to reflect the character's personal location.
-        The DB method itself handles deciding whether to append details
-        or fully replace the location, based on the text of 'new_location'.
-        """
         self.db.update_character_location(
             self.session_id,
             character_name,

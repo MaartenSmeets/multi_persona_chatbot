@@ -74,10 +74,22 @@ Let your responses be immersive, character-driven, and adapted to the latest hap
 """
 
 INTRODUCTION_TEMPLATE = r"""
-As {name}, introduce yourself in a detailed and immersive manner. 
+As {name}, introduce yourself in a detailed and immersive manner, considering the following context:
+
+### Setting ###
+{setting}
+
+### Location ###
+{location}
+
+### Recent Chat History ###
+{chat_history_summary}
+
+### Latest Dialogue ###
+{latest_dialogue}
 
 ---
-**Background & Traits:**
+**Background & Traits**:
 - **Character Description**: {character_description}
 - **Appearance Details**: {appearance}
 
@@ -85,48 +97,31 @@ As {name}, introduce yourself in a detailed and immersive manner.
 
 1. **Set the Scene:**
    - Describe the environment where {name} is located. Incorporate rich sensory details such as sights, sounds, smells, and textures to create an immersive atmosphere.
-   - Example: "In the heart of a bustling marketplace, where the aroma of exotic spices fills the air and the vibrant colors of stalls create a lively backdrop..."
 
 2. **Appearance and Attire:**
    - Detail {name}'s physical appearance, including height, build, hair color/style, and any distinctive features.
    - Describe {name}'s attire, noting how it complements or contrasts with the setting.
-   - Example: "{name} stands tall with a graceful posture, their flowing auburn hair catching the sunlight. They wear a tailored emerald green jacket that stands out amidst the crowd."
 
 3. **Distinctive Features:**
    - Highlight any unique characteristics or accessories that make {name} memorable.
-   - Example: "A delicate silver necklace rests around {name}'s neck, its intricate design hinting at a story untold."
 
 4. **Movements and Posture:**
    - Illustrate how {name} moves and holds themselves. Are their movements graceful, purposeful, or relaxed?
-   - Example: "{name} moves with effortless grace, each step measured and confident, exuding an air of calm determination."
 
 5. **Facial Expressions and Nonverbal Cues:**
    - Describe {name}'s typical facial expressions and what they convey about their personality.
-   - Example: "A warm smile often graces {name}'s lips, and their eyes sparkle with curiosity and intelligence, making others feel welcomed and valued."
 
 6. **Personality Through Words and Actions:**
-   - Showcase {name}'s personality traits through their interactions and behaviors.
-   - Example: "{name} engages in conversations with genuine interest, offering insightful comments and a sharp wit that keeps others intrigued."
+   - Showcase {name}'s personality traits through their interactions and behaviors, referencing any recent dialogue or events.
 
 7. **Impact on Others:**
    - Explain how others perceive {name} and the emotions or thoughts {name} evokes in those around them.
-   - Example: "People are naturally drawn to {name}, finding inspiration in their positive energy and feeling at ease in their presence."
 
 8. **Sensory Immersion:**
    - Incorporate specific sensory details to enhance the vividness of {name}'s introduction.
-   - Example: "The soft hum of background music blends with the chatter of the crowd, enveloping {name} in a vibrant tapestry of sounds."
 
 9. **Overall Tone:**
-   - Present {name} as a multifaceted and engaging character within the described scene.
-   - Example: "Overall, {name} emerges as a captivating individual, seamlessly blending into the lively environment while maintaining an air of intriguing uniqueness that invites others to connect and engage."
+   - Present {name} as a multifaceted and engaging character within the described scene, tying in how recent events have shaped their current demeanor or outlook.
 
-**Example Output:**
-
-In the heart of a bustling marketplace, where the aroma of exotic spices fills the air and the vibrant colors of stalls create a lively backdrop, {name} stands tall with a graceful posture, their flowing auburn hair catching the sunlight. They wear a tailored emerald green jacket that stands out amidst the crowd. A delicate silver necklace rests around {name}'s neck, its intricate design hinting at a story untold.
-
-{name} moves with effortless grace, each step measured and confident, exuding an air of calm determination. A warm smile often graces their lips, and their eyes sparkle with curiosity and intelligence, making others feel welcomed and valued. Engaging in conversations with genuine interest, {name} offers insightful comments and a sharp wit that keeps others intrigued.
-
-People are naturally drawn to {name}, finding inspiration in their positive energy and feeling at ease in their presence. The soft hum of background music blends with the chatter of the crowd, enveloping {name} in a vibrant tapestry of sounds.
-
-Overall, {name} emerges as a captivating individual, seamlessly blending into the lively environment while maintaining an air of intriguing uniqueness that invites others to connect and engage.
+Do not use markdown in your reply. Write in a narrative style that brings {name} to life within the established context.   
 """
