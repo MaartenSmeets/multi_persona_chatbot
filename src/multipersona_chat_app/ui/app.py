@@ -309,7 +309,8 @@ async def generate_character_introduction_message(character_name: str):
     logger.info(f"Generating introduction message for character: {character_name}")
     (system_prompt, user_prompt) = chat_manager.build_prompt_for_character(character_name)
 
-    introduction_template = chat_manager.get_introduction_template()
+    introduction_template = chat_manager.get_introduction_template().replace("{name}", character_name)
+
     user_prompt += f"\n\n{introduction_template}"
 
     global llm_busy
