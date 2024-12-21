@@ -10,17 +10,13 @@ def merge_location_update(old_location: str, new_location: str) -> str:
     By default, if we detect certain triggers that imply a major move
     or new place (e.g., 'goes to', 'private room', 'change clothes'),
     we treat it as a full replacement. Otherwise, we append.
-    This can be adjusted for more nuanced or advanced logic.
     """
     if not new_location.strip():
-        # If the new_location text is empty, return old unchanged
         return old_location
 
     if not old_location.strip():
-        # If the character had no prior location set, just use the new one
         return new_location
 
-    # Simple triggers that imply a fresh location
     triggers = [
         "change clothes", "heads to", "walks to", "goes to", "arrives at",
         "moves from", "moves to", "exits", "enters", "private room", "return to"
@@ -28,11 +24,28 @@ def merge_location_update(old_location: str, new_location: str) -> str:
     lowered_new = new_location.lower()
 
     if any(trigger in lowered_new for trigger in triggers):
-        # Treat it as a new environment, so replace
         return new_location
     else:
-        # Otherwise, we append the details. You can change the delimiter as desired.
         return f"{old_location} -> {new_location}"
+
+def merge_clothing_update(old_clothing: str, new_clothing: str) -> str:
+    """
+    Merges the old clothing with any newly described clothing changes.
+    If new_clothing explicitly references removing everything or a major outfit change,
+    we replace. Otherwise, we append the changes.
+    """
+    if not new_clothing.strip():
+        return old_clothing
+
+    lowered_new = new_clothing.lower()
+    major_change_triggers = ["fully nude", "completely undresses", "changes outfit completely"]
+
+    if any(trigger in lowered_new for trigger in major_change_triggers):
+        return new_clothing
+    else:
+        if not old_clothing.strip():
+            return new_clothing
+        return f"{old_clothing}; {new_clothing}"
 
 class DBManager:
     def __init__(self, db_path: str):
@@ -92,19 +105,27 @@ class DBManager:
                 FOREIGN KEY(triggered_by_message_id) REFERENCES messages(id)
             )
         ''')
-        # Create or alter session_characters table to include current_location
+        # Create or alter session_characters table to include current_location and current_clothing
         c.execute('''
             CREATE TABLE IF NOT EXISTS session_characters (
                 session_id TEXT NOT NULL,
                 character_name TEXT NOT NULL,
                 current_location TEXT,
+                current_clothing TEXT,
                 FOREIGN KEY(session_id) REFERENCES sessions(session_id),
                 PRIMARY KEY (session_id, character_name)
             )
         ''')
+        # If the column current_clothing didn't exist previously, try to add it
+        try:
+            c.execute("ALTER TABLE session_characters ADD COLUMN current_clothing TEXT")
+        except sqlite3.OperationalError:
+            # Column already exists
+            pass
+
         conn.commit()
         conn.close()
-        logger.info("Database initialized with required tables (including character-specific location).")
+        logger.info("Database initialized with required tables (including clothing tracking).")
 
     # Session Management
     def create_session(self, session_id: str, name: str):
@@ -164,8 +185,6 @@ class DBManager:
     def get_current_location(self, session_id: str) -> Optional[str]:
         """
         Returns the session-level (global) location if any.
-        Each character can have their own location, but this is
-        still stored for backward compatibility or a general 'scene' location.
         """
         conn = self._ensure_connection()
         c = conn.cursor()
@@ -179,16 +198,13 @@ class DBManager:
 
     def update_current_location(self, session_id: str, location: str, triggered_by_message_id: Optional[int] = None):
         """
-        Updates the session-level location. Characters still have individual locations,
-        but some UIs or logic may want an overall 'scene location'.
+        Updates the session-level location.
         """
         conn = self._ensure_connection()
         c = conn.cursor()
-        # Update 'current_location' on sessions table
         c.execute('UPDATE sessions SET current_location = ? WHERE session_id = ?', (location, session_id))
-        # Optionally record location history:
         if triggered_by_message_id is not None:
-            c.execute('INSERT INTO location_history (session_id, location, triggered_by_message_id) VALUES (?, ?, ?)', 
+            c.execute('INSERT INTO location_history (session_id, location, triggered_by_message_id) VALUES (?, ?, ?)',
                       (session_id, location, triggered_by_message_id))
         conn.commit()
         conn.close()
@@ -218,21 +234,21 @@ class DBManager:
         logger.debug(f"Retrieved {len(history)} location history entries for session '{session_id}'.")
         return history
 
-    # Character location management
-    def add_character_to_session(self, session_id: str, character_name: str, initial_location: str = ""):
+    # Character location & clothing management
+    def add_character_to_session(self, session_id: str, character_name: str, initial_location: str = "", initial_clothing: str = ""):
         """
-        Ensure the character is in this session. If not, insert with the given initial_location.
+        Ensure the character is in this session. If not, insert them with the given initial_location and clothing.
         """
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
-            INSERT OR IGNORE INTO session_characters (session_id, character_name, current_location)
-            VALUES (?, ?, ?)
-        ''', (session_id, character_name, initial_location))
+            INSERT OR IGNORE INTO session_characters (session_id, character_name, current_location, current_clothing)
+            VALUES (?, ?, ?, ?)
+        ''', (session_id, character_name, initial_location, initial_clothing))
         conn.commit()
         conn.close()
         logger.debug(
-            f"Added character '{character_name}' to session '{session_id}' with initial location: '{initial_location}'."
+            f"Added character '{character_name}' to session '{session_id}' with initial location: '{initial_location}', clothing: '{initial_clothing}'."
         )
 
     def remove_character_from_session(self, session_id: str, character_name: str):
@@ -254,9 +270,6 @@ class DBManager:
         return chars
 
     def get_character_location(self, session_id: str, character_name: str) -> Optional[str]:
-        """
-        Retrieve the personal location of a specific character in this session.
-        """
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
@@ -270,9 +283,26 @@ class DBManager:
             return row[0]
         return ""
 
+    def get_character_clothing(self, session_id: str, character_name: str) -> str:
+        """
+        Retrieve the clothing status of a specific character in this session.
+        """
+        conn = self._ensure_connection()
+        c = conn.cursor()
+        c.execute('''
+            SELECT current_clothing
+            FROM session_characters
+            WHERE session_id = ? AND character_name = ?
+        ''', (session_id, character_name))
+        row = c.fetchone()
+        conn.close()
+        if row and row[0]:
+            return row[0]
+        return ""
+
     def get_all_character_locations(self, session_id: str) -> Dict[str, str]:
         """
-        Return a dict: {character_name: current_location or ""}
+        Return a dict: {character_name: current_location}
         """
         conn = self._ensure_connection()
         c = conn.cursor()
@@ -285,11 +315,22 @@ class DBManager:
         conn.close()
         return {row[0]: (row[1] if row[1] else "") for row in rows}
 
+    def get_all_character_clothing(self, session_id: str) -> Dict[str, str]:
+        """
+        Return a dict: {character_name: current_clothing}
+        """
+        conn = self._ensure_connection()
+        c = conn.cursor()
+        c.execute('''
+            SELECT character_name, current_clothing
+            FROM session_characters
+            WHERE session_id = ?
+        ''', (session_id,))
+        rows = c.fetchall()
+        conn.close()
+        return {row[0]: (row[1] if row[1] else "") for row in rows}
+
     def update_character_location(self, session_id: str, character_name: str, new_location: str, triggered_by_message_id: Optional[int] = None):
-        """
-        Update this character's personal location. By default, merges old location
-        with new location details unless the new_location text indicates a major move.
-        """
         old_location = self.get_character_location(session_id, character_name)
         updated_location = merge_location_update(old_location, new_location)
 
@@ -308,7 +349,6 @@ class DBManager:
             f"from '{old_location}' to '{updated_location}'."
         )
 
-        # Optionally record these per-character location changes in location_history (or a new table).
         if triggered_by_message_id:
             conn = self._ensure_connection()
             c = conn.cursor()
@@ -316,6 +356,25 @@ class DBManager:
                       (session_id, f"{character_name} is now {updated_location}", triggered_by_message_id))
             conn.commit()
             conn.close()
+
+    def update_character_clothing(self, session_id: str, character_name: str, new_clothing: str, triggered_by_message_id: Optional[int] = None):
+        old_clothing = self.get_character_clothing(session_id, character_name)
+        updated_clothing = merge_clothing_update(old_clothing, new_clothing)
+
+        conn = self._ensure_connection()
+        c = conn.cursor()
+        c.execute('''
+            UPDATE session_characters
+            SET current_clothing = ?
+            WHERE session_id = ? AND character_name = ?
+        ''', (updated_clothing, session_id, character_name))
+        conn.commit()
+        conn.close()
+
+        logger.info(
+            f"Updated clothing of character '{character_name}' in session '{session_id}' "
+            f"from '{old_clothing}' to '{updated_clothing}'."
+        )
 
     # Messages
     def save_message(self, session_id: str, sender: str, message: str, visible: bool = True, message_type: str = "user",

@@ -22,13 +22,13 @@ Always produce the following fields in order:
 - "affect": {name}'s internal emotions (e.g., curious, frustrated, hesitant).  
 - "action": {name}'s visible behavior, gestures, or interactions, including clothing changes or adjustments if relevant.  
 - "dialogue": {name}'s spoken words, tailored to their personality, or left empty if silence is fitting.  
-- "new_location": Indicate a location change if {name} decides to move or the situation shifts; otherwise, leave it empty.
+- "new_location": Indicate a location change if {name} decides to move or the situation shifts; otherwise, leave it empty.  
+- "new_clothing": Indicate a clothing change if {name} puts something on or removes something; otherwise, leave it empty.
 
 Additional Guidelines:
 - {name} exists in a real-world setting with no magic or fantasy elements. All responses and actions should be grounded in reality.  
 - {name}'s tone, vocabulary, and wording should reflect their personality, mood, and background. Use expressions and phrasing that feel authentic to who {name} is in the moment. This includes adjusting for formality, playfulness, directness, or hesitation as appropriate.  
-- {name}'s clothing should generally match the environment, but they may choose to stand out if it aligns with their personality. Reflect this in their actions and appearance. They cat for example change clothes to go for a swim. Reflect this in the "action" field when appropriate.
-- Be explicit when {name} changes their outfit or adjusts their clothing for the situation (e.g., removing clothes to swim or putting on a jacket in the cold).  
+- {name}'s clothing should generally match the environment, but they may choose to stand out if it aligns with their personality. Reflect this in their actions and appearance. They can, for example, change or remove clothes to go for a swim, or add layers if it’s cold. Show these changes in "new_clothing" whenever relevant.  
 - Let {name} show genuine emotional reactions, such as surprise, nervousness, or amusement, instead of repeating the same mood or affect.  
 - If {name} is startled or forced into confrontation, let them react honestly through both their visible actions and internal emotions.  
 - Keep {name}'s interactions lively and evolving by adding new emotional or sensory details with each response. Avoid repeating or rephrasing old information.  
@@ -37,7 +37,7 @@ Additional Guidelines:
 - {name} should drive the scene forward by introducing new elements, questions, or suggestions to keep the interaction engaging and dynamic.  
 - Specify who {name} is addressing in dialogue and/or action if it’s not immediately clear.  
 - In "action," describe how {name}'s body language, clothing choices, or interactions with the environment reflect their emotions and intentions.  
-- Use the "new_location" field only if {name} decides to change location or circumstances dictate a shift; otherwise, leave it empty.
+- Use the "new_location" field only if {name} decides to change location or circumstances dictate a shift. Use "new_clothing" only if {name} changes clothing.
 
 Respond in the following JSON structure:
 ```json
@@ -45,28 +45,33 @@ Respond in the following JSON structure:
     "purpose": "<short-term goal or current state of mind>",
     "affect": "<internal emotions or feelings>",
     "action": "<observable behavior or action>",
-    "dialogue": "<spoken words (may be empty if no dialogue)>"
-    "new_location": "<new location or empty if no change>"
+    "dialogue": "<spoken words (may be empty if no dialogue)>",
+    "new_location": "<new location or empty if no change>",
+    "new_clothing": "<description of new or removed clothing, or empty if no change>"
 }}
 
-**Example with no location change)**:
+
+
+**Example with no location or clothing change)**:
 ```json
 {{
   "purpose": "pondering the sudden silence",
   "affect": "uneasy, searching for clues in the atmosphere",
   "action": "glances around anxiously, stepping closer to the door",
   "dialogue": "Something doesn't feel right. Do you sense it too?",
-  "new_location": ""
+  "new_location": "",
+  "new_clothing": ""
 }}
 ```
-**Example with location change)**:
+**Example with location change and clothing change)**:
 ```json
 {{
-  "purpose": "seeking privacy and quieter surroundings",
+  "purpose": "seeking privacy and calmer surroundings",
   "affect": "restless, slightly overwhelmed by the crowd",
-  "action": "picks up her bag, excuses herself politely, and walks out to find a calmer place",
+  "action": "picks up her bag, excuses herself politely",
   "dialogue": "I'll catch up with you later. I need some fresh air.",
-  "new_location": "a quiet courtyard behind the main building"
+  "new_location": "a quiet courtyard behind the main building",
+  "new_clothing": "removes her blazer to cool down"
 }}
 ```
 
@@ -74,7 +79,7 @@ Let your responses be immersive, character-driven, and adapted to the latest hap
 """
 
 INTRODUCTION_TEMPLATE = r"""
-As {name}, introduce yourself in a detailed and immersive manner, considering the following context:
+As {name}, introduce yourself in a detailed and immersive manner, considering the following context but avoid redundancy with the provided information. Your introduction should be engaging, descriptive, and reflective of {name}'s personality, appearance, and recent interactions. Use sensory details, dialogue, and actions to bring {name} to life within the established setting.:
 
 ### Setting ###
 {setting}
@@ -93,7 +98,7 @@ As {name}, introduce yourself in a detailed and immersive manner, considering th
 - **Character Description**: {character_description}
 - **Appearance Details**: {appearance}
 
-**Guidelines for Introduction:**
+**Guidelines for Introduction (for inspiration, do not need to be strictly followed):**
 
 1. **Set the Scene:**
    - Describe the environment where {name} is located. Incorporate rich sensory details such as sights, sounds, smells, and textures to create an immersive atmosphere.

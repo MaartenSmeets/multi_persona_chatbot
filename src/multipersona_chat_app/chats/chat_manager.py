@@ -7,6 +7,7 @@ from llm.ollama_client import OllamaClient
 from datetime import datetime
 import yaml
 from templates import INTRODUCTION_TEMPLATE
+from models.interaction import Interaction
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,6 @@ class ChatManager:
         existing_sessions = {s['session_id']: s for s in self.db.get_all_sessions()}
         if self.session_id not in existing_sessions:
             self.db.create_session(self.session_id, f"Session {self.session_id}")
-            # Try default "Intimate Setting" if present
             intimate_setting = self.settings.get("Intimate Setting")
             if intimate_setting:
                 self.set_current_setting(
@@ -44,7 +44,6 @@ class ChatManager:
                 logger.error("'Intimate Setting' not found in provided settings. No default setting will be applied.")
                 self.current_setting = None
         else:
-            # Load existing setting from DB
             stored_setting = self.db.get_current_setting(self.session_id)
             if stored_setting:
                 setting = self.settings.get(stored_setting)
@@ -105,11 +104,10 @@ class ChatManager:
 
     def add_character(self, char_name: str, char_instance: Character):
         self.characters[char_name] = char_instance
-        current_session_loc = self.db.get_current_location(self.session_id)
-        if not current_session_loc:
-            if self.current_setting and self.current_setting in self.settings:
-                current_session_loc = self.settings[self.current_setting]['start_location']
-        self.db.add_character_to_session(self.session_id, char_name, current_session_loc or "")
+        current_session_loc = self.db.get_current_location(self.session_id) or ""
+        self.db.add_character_to_session(self.session_id, char_name, initial_location=current_session_loc, initial_clothing=char_instance.appearance)
+        # By default, we store the character's initial clothing as the "appearance" field from the YAML
+        # This can be updated later when "new_clothing" events occur.
 
     def remove_character(self, char_name: str):
         if char_name in self.characters:
@@ -128,7 +126,7 @@ class ChatManager:
             self.turn_index = (self.turn_index + 1) % len(chars)
 
     def add_message(self, sender: str, message: str, visible: bool = True, message_type: str = "user",
-                    affect: Optional[str]=None, purpose: Optional[str]=None) -> Optional[int]:
+                    affect: Optional[str] = None, purpose: Optional[str] = None) -> Optional[int]:
         if message_type == "system" or message.strip() == "...":
             return None
         message_id = self.db.save_message(self.session_id, sender, message, visible, message_type, affect, purpose)
@@ -141,10 +139,6 @@ class ChatManager:
                 for m in msgs if m["visible"]]
 
     def build_prompt_for_character(self, character_name: str) -> Tuple[str, str]:
-        """
-        Build the system prompt + user prompt for normal, JSON-structured conversation.
-        This method references all characters who have participated in the chat.
-        """
         visible_history = self.get_visible_history()
         latest_dialogue = visible_history[-1][1] if visible_history else ""
         all_summaries = self.db.get_all_summaries(self.session_id, character_name)
@@ -155,9 +149,7 @@ class ChatManager:
         else:
             setting_description = "A tranquil environment."
 
-        # Here we include the location for *all* participants who have spoken:
         location = self.get_combined_location()
-
         char = self.characters[character_name]
 
         # Load morality guidelines
@@ -188,14 +180,8 @@ class ChatManager:
         return (system_prompt, user_prompt)
 
     def build_introduction_prompts_for_character(self, character_name: str) -> Tuple[str, str]:
-        """
-        Build the system prompt + user prompt specifically for an unstructured introduction.
-        Only the *current session/location* is used—other characters who haven't participated
-        are excluded here to avoid referencing them before they've been introduced.
-        """
         char = self.characters[character_name]
 
-        # Gather context to feed into the introduction
         visible_history = self.get_visible_history()
         latest_dialogue = visible_history[-1][1] if visible_history else ""
         all_summaries = self.db.get_all_summaries(self.session_id, character_name)
@@ -206,13 +192,10 @@ class ChatManager:
         else:
             setting_description = "A tranquil environment."
 
-        # For the introduction, use only the session's current location or the default start location
-        # — do not mention other characters to avoid referencing them prematurely.
         session_loc = self.db.get_current_location(self.session_id) or ""
         if not session_loc and self.current_setting in self.settings:
             session_loc = self.settings[self.current_setting].get('start_location', '')
 
-        # Load morality guidelines
         morality_config_path = os.path.join("src", "multipersona_chat_app", "config", "morality_guidelines.yaml")
         try:
             with open(morality_config_path, 'r') as f:
@@ -223,7 +206,6 @@ class ChatManager:
             logger.error(f"Failed to load morality guidelines for introduction: {e}")
             morality_guidelines = ""
 
-        # System prompt remains minimal but consistent with the character's overall instructions
         system_prompt = (
             f"{char.system_prompt_template}\n\n"
             f"Appearance: {char.appearance}\n"
@@ -231,13 +213,12 @@ class ChatManager:
             f"Guidelines: {morality_guidelines}\n\n"
         )
 
-        # Format the introduction template with the context
         intro_prompt = INTRODUCTION_TEMPLATE.format(
             name=char.name,
             appearance=char.appearance,
             character_description=char.character_description,
             setting=setting_description,
-            location=session_loc,  # Do NOT use combined location here
+            location=session_loc,
             chat_history_summary=chat_history_summary,
             latest_dialogue=latest_dialogue
         )
@@ -247,20 +228,14 @@ class ChatManager:
         return system_prompt, user_prompt
 
     def get_combined_location(self) -> str:
-        """
-        Return a string describing only the locations of characters who have actually
-        participated (sent at least one user- or character-type message). Skips mention
-        of unintroduced characters. Improves the phrasing so it reads “X is at <location>.”
-        """
         char_locs = self.db.get_all_character_locations(self.session_id)
+        char_clothes = self.db.get_all_character_clothing(self.session_id)
         msgs = self.db.get_messages(self.session_id)
-        # Determine which characters have participated:
         participants = set(
             m["sender"] for m in msgs 
             if m["message_type"] in ["user", "character"]
         )
 
-        # If no participants, we default to the session location or a fallback text
         if not participants:
             session_loc = self.db.get_current_location(self.session_id)
             if not session_loc and self.current_setting in self.settings:
@@ -271,17 +246,20 @@ class ChatManager:
                 return "No characters present and no specific location known."
 
         parts = []
-        for c_name, loc in char_locs.items():
+        for c_name in char_locs.keys():
             if c_name not in participants:
-                # Skip unintroduced/unparticipated characters
                 continue
-            if loc.strip():
-                parts.append(f"{c_name} is at {loc}")
+            c_loc = char_locs[c_name].strip()
+            c_clothes = char_clothes.get(c_name, "").strip()
+            if not c_loc and not c_clothes:
+                parts.append(f"{c_name}'s location and clothing are unknown")
+            elif c_loc and not c_clothes:
+                parts.append(f"{c_name} is at {c_loc} (clothing status unknown)")
+            elif not c_loc and c_clothes:
+                parts.append(f"{c_name} is wearing: {c_clothes}, location unknown")
             else:
-                parts.append(f"{c_name}'s location is unknown")
-
+                parts.append(f"{c_name} is at {c_loc}, wearing: {c_clothes}")
         if not parts:
-            # If no introduced character has a location, revert to session location or fallback
             session_loc = self.db.get_current_location(self.session_id)
             if not session_loc and self.current_setting in self.settings:
                 session_loc = self.settings[self.current_setting].get('start_location', '')
@@ -289,8 +267,6 @@ class ChatManager:
                 return f"The setting is: {session_loc}"
             else:
                 return "No active character locations known."
-
-        # Join the partial statements with " | " for clarity.
         return " | ".join(parts)
 
     def start_automatic_chat(self):
@@ -306,8 +282,11 @@ class ChatManager:
     def summarize_history_for_character(self, character_name: str):
         msgs = self.db.get_messages(self.session_id)
         last_covered_id = self.db.get_latest_covered_message_id(self.session_id, character_name)
-        relevant_msgs = [(m["id"], m["sender"], m["message"], m["affect"], m.get("purpose", None))
-                         for m in msgs if m["visible"] and m["message_type"] != "system" and m["id"] > last_covered_id]
+        relevant_msgs = [
+            (m["id"], m["sender"], m["message"], m["affect"], m.get("purpose", None))
+            for m in msgs
+            if m["visible"] and m["message_type"] != "system" and m["id"] > last_covered_id
+        ]
 
         if len(relevant_msgs) < self.max_dialogue_length_before_summarization:
             return
@@ -329,9 +308,10 @@ class ChatManager:
 
 Your summary must:
 - Reflect only what {character_name} directly observes or experiences.
-- Note any newly revealed behaviors, location changes, or expressed feelings from {character_name}'s own messages.
+- Note any newly revealed behaviors, location changes, clothing changes, or expressed feelings from {character_name}'s own messages.
 - Exclude repeated content that was previously summarized.
-- Include location changes or new character introductions.
+- Include location changes, new clothing, or new character introductions.
+
 New events for {character_name} to summarize:
 {history_text}
 """
@@ -349,13 +329,13 @@ New events for {character_name} to summarize:
         else:
             ids_to_hide = to_hide_ids[:]
 
-        conn = self.db._ensure_connection()
-        c = conn.cursor()
         if ids_to_hide:
+            conn = self.db._ensure_connection()
+            c = conn.cursor()
             placeholders = ",".join("?" * len(ids_to_hide))
             c.execute(f"UPDATE messages SET visible=0 WHERE id IN ({placeholders})", ids_to_hide)
-        conn.commit()
-        conn.close()
+            conn.commit()
+            conn.close()
 
         logger.info(f"Summarized and concealed old messages for {character_name}, up to message ID {covered_up_to_message_id}.")
 
@@ -377,3 +357,12 @@ New events for {character_name} to summarize:
             triggered_by_message_id=triggered_message_id
         )
         logger.info(f"Character '{character_name}' moved/updated location to '{new_location}'.")
+
+    async def handle_new_clothing_for_character(self, character_name: str, new_clothing: str, triggered_message_id: int):
+        self.db.update_character_clothing(
+            self.session_id,
+            character_name,
+            new_clothing,
+            triggered_by_message_id=triggered_message_id
+        )
+        logger.info(f"Character '{character_name}' updated clothing to '{new_clothing}'.")

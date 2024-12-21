@@ -1,5 +1,3 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/ui/app.py
-
 import os
 import uuid
 import asyncio
@@ -17,7 +15,7 @@ from utils import load_settings, get_available_characters
 logger = logging.getLogger(__name__)
 
 llm_client = None
-introduction_llm_client = None  # Dedicated for intros
+introduction_llm_client = None
 chat_manager = None
 
 user_input = None
@@ -37,9 +35,7 @@ CHARACTERS_DIR = "src/multipersona_chat_app/characters"
 ALL_CHARACTERS = {}
 ALL_SETTINGS = []
 
-# Track which characters have given their introduction
 introductions_given = {}
-
 llm_busy = False
 
 def init_chat_manager(session_id: str, settings: List[Dict]):
@@ -47,14 +43,12 @@ def init_chat_manager(session_id: str, settings: List[Dict]):
     logger.debug(f"Initializing ChatManager with session_id: {session_id}")
     chat_manager = ChatManager(you_name="You", session_id=session_id, settings=settings)
     try:
-        # Normal conversation client (expects structured JSON -> Interaction model)
         llm_client = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml', output_model=Interaction)
         logger.info("LLM Client initialized successfully (structured).")
     except Exception as e:
         logger.error(f"Error initializing LLM Client: {e}")
 
     try:
-        # Introduction client (unstructured, no output model)
         introduction_llm_client = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml', output_model=None)
         logger.info("Introduction LLM Client initialized successfully (unstructured).")
     except Exception as e:
@@ -278,12 +272,7 @@ def show_chat_display():
             timestamp = entry["created_at"]
             dt = datetime.fromisoformat(timestamp)
             human_timestamp = dt.strftime('%Y-%m-%d %H:%M:%S')
-            if entry.get("message_type") == "system":
-                formatted_message = f"**{name}** [{human_timestamp}]:\n\n*{message}*"
-            elif entry.get("message_type") == "character":
-                formatted_message = f"**{name}** [{human_timestamp}]:\n\n{message}"
-            else:
-                formatted_message = f"**{name}** [{human_timestamp}]:\n\n{message}"
+            formatted_message = f"**{name}** [{human_timestamp}]:\n\n{message}"
             ui.markdown(formatted_message)
     logger.debug("Chat display refreshed.")
 
@@ -318,7 +307,6 @@ async def next_character_response():
 async def generate_character_introduction_message(character_name: str):
     logger.info(f"Generating introduction message for character: {character_name}")
 
-    # BUILD THE SEPARATE, UNSTRUCTURED INTRO PROMPTS:
     (system_prompt, introduction_prompt) = chat_manager.build_introduction_prompts_for_character(character_name)
 
     global llm_busy
@@ -332,7 +320,6 @@ async def generate_character_introduction_message(character_name: str):
             prompt=introduction_prompt,
             system=system_prompt
         )
-        # introduction_response will be a raw string or None
         if isinstance(introduction_response, str) and introduction_response.strip():
             formatted_message = introduction_response.strip()
             chat_manager.add_message(
@@ -356,14 +343,12 @@ async def generate_character_introduction_message(character_name: str):
 
 async def generate_character_message(character_name: str):
     logger.info(f"Generating message for character: {character_name}")
-    # Check if this character has introduced themselves
     msgs = chat_manager.db.get_messages(chat_manager.session_id)
     char_spoken_before = any(m for m in msgs if m["sender"] == character_name and m["message_type"] == "character")
 
     if character_name not in introductions_given:
         introductions_given[character_name] = False
 
-    # If not introduced yet, do the introduction
     if not introductions_given[character_name] and not char_spoken_before:
         await generate_character_introduction_message(character_name)
         return
@@ -382,7 +367,6 @@ async def generate_character_message(character_name: str):
             system=system_prompt
         )
         if isinstance(interaction, Interaction):
-            # Validate the structured fields
             if (not interaction.purpose.strip()
                 or not interaction.affect.strip()
                 or not interaction.action.strip()):
@@ -399,6 +383,8 @@ async def generate_character_message(character_name: str):
                 )
                 if interaction.new_location.strip():
                     await chat_manager.handle_new_location_for_character(character_name, interaction.new_location, msg_id)
+                if interaction.new_clothing.strip():
+                    await chat_manager.handle_new_clothing_for_character(character_name, interaction.new_clothing, msg_id)
                 logger.debug(f"Message generated for {character_name}: {interaction.dialogue}")
         else:
             logger.warning(f"No valid interaction or no response for {character_name}. Not storing.")
