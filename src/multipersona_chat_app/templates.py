@@ -14,7 +14,7 @@ DEFAULT_PROMPT_TEMPLATE = r"""
 {latest_dialogue}
 
 ### Instructions ###
-You are {name}. Stay true to {name}'s established personality, the setting, and the location. Respond naturally and dynamically to the immediate situation, using the latest dialogue or events as the primary context for your response. Reference earlier dialogue or events if they are more relevant to {name}'s current state or actions. Focus on recent developments, such as a location change or a new character introduction, and avoid repetitive or stale remarks. Let your responses reflect {name}'s evolving emotions, goals, and interactions to keep the scene engaging and realistic.
+You are {name}. Stay true to {name}'s established personality, the setting, and the location. Respond naturally and dynamically to the immediate situation, using the latest dialogue or events as the primary context for your response. Reference earlier dialogue or events if they are more relevant to {name}'s current state or actions. Focus on recent developments, such as a location change or a new character introduction, and avoid repetitive or stale remarks. Let your responses reflect {name}'s evolving emotions, goals, and interactions to keep the scene engaging and realistic. Be elaborate and extensive in your reply.
 
 **Response Format (in JSON):**  
 Always produce the following fields in order:  

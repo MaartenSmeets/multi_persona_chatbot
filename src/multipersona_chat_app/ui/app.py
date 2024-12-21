@@ -15,6 +15,7 @@ from utils import load_settings, get_available_characters
 logger = logging.getLogger(__name__)
 
 llm_client = None
+introduction_llm_client = None  # New client for introductions
 chat_manager = None
 
 user_input = None
@@ -40,7 +41,7 @@ introductions_given = {}
 llm_busy = False
 
 def init_chat_manager(session_id: str, settings: List[Dict]):
-    global chat_manager, llm_client
+    global chat_manager, llm_client, introduction_llm_client
     logger.debug(f"Initializing ChatManager with session_id: {session_id}")
     chat_manager = ChatManager(you_name="You", session_id=session_id, settings=settings)
     try:
@@ -48,6 +49,12 @@ def init_chat_manager(session_id: str, settings: List[Dict]):
         logger.info("LLM Client initialized successfully.")
     except Exception as e:
         logger.error(f"Error initializing LLM Client: {e}")
+
+    try:
+        introduction_llm_client = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml')
+        logger.info("Introduction LLM Client initialized successfully.")
+    except Exception as e:
+        logger.error(f"Error initializing Introduction LLM Client: {e}")
 
 def refresh_added_characters():
     logger.debug("Refreshing added characters in UI.")
@@ -319,27 +326,24 @@ async def generate_character_introduction_message(character_name: str):
     llm_busy_label.update()
 
     try:
-        interaction = await run.io_bound(llm_client.generate, prompt=user_prompt, system=system_prompt)
-        if isinstance(interaction, Interaction):
-            # Check that fields are valid:
-            if (not interaction.purpose.strip() or not interaction.affect.strip() or not interaction.action.strip()):
-                logger.warning("Received incomplete interaction fields for introduction. Not storing.")
-            else:
-                formatted_message = f"*{interaction.action}*\n{interaction.dialogue}"
-                msg_id = chat_manager.add_message(
-                    character_name,
-                    formatted_message,
-                    visible=True,
-                    message_type="character",
-                    affect=interaction.affect,
-                    purpose=interaction.purpose
-                )
-                introductions_given[character_name] = True
+        # Use the introduction_llm_client which does not expect a structured response
+        introduction_response = await run.io_bound(introduction_llm_client.generate, prompt=user_prompt, system=system_prompt)
+        if isinstance(introduction_response, str) and introduction_response.strip():
+            formatted_message = f"{introduction_response.strip()}"
+            msg_id = chat_manager.add_message(
+                character_name,
+                formatted_message,
+                visible=True,
+                message_type="character",
+                affect=None,  # Affect can be extracted if needed
+                purpose=None  # Purpose can be extracted if needed
+            )
+            introductions_given[character_name] = True
 
-                # ADDED: Apply structured location change if provided
-                if interaction.new_location.strip():
-                    chat_manager.set_current_location(interaction.new_location, triggered_by_message_id=msg_id)
-                logger.info(f"Introduction message generated for {character_name}.")
+            # Optionally handle new_location if applicable
+            # This assumes the introduction might contain location changes in free text
+            # Additional parsing can be implemented if needed
+            logger.info(f"Introduction message generated for {character_name}.")
         else:
             logger.warning(f"Invalid or no response received for introduction of {character_name}. Not storing.")
     except Exception as e:
