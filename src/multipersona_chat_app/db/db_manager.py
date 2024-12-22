@@ -6,7 +6,6 @@ logger = logging.getLogger(__name__)
 
 def merge_location_update(old_location: str, new_location: str) -> str:
     """
-    Simplified approach. We rely on the LLM to determine if a location changes.
     If new_location is empty, keep old. If not empty, replace with the new location.
     """
     if not new_location.strip():
@@ -15,8 +14,6 @@ def merge_location_update(old_location: str, new_location: str) -> str:
 
 def merge_clothing_update(old_clothing: str, new_clothing: str) -> str:
     """
-    Keep existing logic for clothing if you wish, or simplify similarly. 
-    We'll keep it consistent with location for simplicity:
     If new_clothing is empty, keep old. If not empty, replace with new.
     """
     if not new_clothing.strip():
@@ -45,7 +42,7 @@ class DBManager:
             )
         ''')
 
-        # Create messages table (updated with new why_* columns, plus new_location, new_clothing)
+        # Create messages table (with columns for all "why_*" plus new_location/new_clothing)
         c.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,7 +62,6 @@ class DBManager:
                 why_new_location TEXT,
                 why_new_clothing TEXT,
 
-                -- Newly added columns for storing the final chosen location/clothing from the JSON
                 new_location TEXT,
                 new_clothing TEXT,
 
@@ -73,7 +69,7 @@ class DBManager:
             )
         ''')
 
-        # Try altering the messages table to add new columns if they don't exist
+        # Add columns if they do not exist:
         columns_to_add = [
             ("why_purpose", "TEXT"),
             ("why_affect", "TEXT"),
@@ -131,7 +127,7 @@ class DBManager:
         except sqlite3.OperationalError:
             pass
 
-        # New table: character_prompts
+        # Create character_prompts table
         c.execute('''
             CREATE TABLE IF NOT EXISTS character_prompts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -144,9 +140,23 @@ class DBManager:
             )
         ''')
 
+        # NEW: Create clothing_history table for storing chronological clothing changes
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS clothing_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                character_name TEXT NOT NULL,
+                clothing TEXT NOT NULL,
+                changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                triggered_by_message_id INTEGER,
+                FOREIGN KEY(session_id) REFERENCES sessions(session_id),
+                FOREIGN KEY(triggered_by_message_id) REFERENCES messages(id)
+            )
+        ''')
+
         conn.commit()
         conn.close()
-        logger.info("Database initialized with required tables (including new location/clothing columns).")
+        logger.info("Database initialized with required tables (including new location/clothing histories).")
 
     # Session Management
 
@@ -170,6 +180,7 @@ class DBManager:
         c.execute('DELETE FROM location_history WHERE session_id = ?', (session_id,))
         c.execute('DELETE FROM session_characters WHERE session_id = ?', (session_id,))
         c.execute('DELETE FROM character_prompts WHERE session_id = ?', (session_id,))
+        c.execute('DELETE FROM clothing_history WHERE session_id = ?', (session_id,))
         c.execute('DELETE FROM sessions WHERE session_id = ?', (session_id,))
         conn.commit()
         conn.close()
@@ -380,6 +391,17 @@ class DBManager:
             f"Updated clothing of character '{character_name}' in session '{session_id}' "
             f"from '{old_clothing}' to '{updated_clothing}'."
         )
+
+        if triggered_by_message_id:
+            # Also record in clothing_history
+            conn = self._ensure_connection()
+            c = conn.cursor()
+            c.execute('''
+                INSERT INTO clothing_history (session_id, character_name, clothing, triggered_by_message_id)
+                VALUES (?, ?, ?, ?)
+            ''', (session_id, character_name, updated_clothing, triggered_by_message_id))
+            conn.commit()
+            conn.close()
 
     # Messages
     def save_message(self,
