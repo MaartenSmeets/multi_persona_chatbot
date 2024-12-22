@@ -57,7 +57,6 @@ class OllamaClient:
                     logger.error("Error parsing cached response. Treating as invalid and returning None.")
                     return None
             else:
-                # For unstructured responses, return the cached string as-is
                 return cached_response
 
         headers = {
@@ -79,7 +78,6 @@ class OllamaClient:
         if system:
             payload['system'] = system
 
-        # Only add format if we have an output model expecting JSON
         if self.output_model:
             payload['format'] = self.output_model.model_json_schema()
 
@@ -131,14 +129,15 @@ class OllamaClient:
                             if self.output_model:
                                 try:
                                     parsed_output = self.output_model.parse_raw(output)
+                                    # Log the structured output so we can see it in the logs:
+                                    logger.info("Final parsed output (structured) stored in cache.")
+                                    logger.info(f"Structured Output: {parsed_output.dict()}")
                                     self.cache_manager.store_response(prompt, model_name, output)
-                                    logger.info(f"Final parsed output (structured) stored in cache.")
                                     return parsed_output
                                 except Exception as e:
                                     logger.error(f"Error parsing model output: {e}")
                                     return None
                             else:
-                                # Unstructured text: store in cache, then return as string
                                 self.cache_manager.store_response(prompt, model_name, output)
                                 logger.info("Final unstructured output stored in cache.")
                                 return output

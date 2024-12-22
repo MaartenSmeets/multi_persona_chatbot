@@ -1,3 +1,5 @@
+# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/ui/app.py
+
 import os
 import uuid
 import asyncio
@@ -29,7 +31,9 @@ session_dropdown = None
 chat_display = None
 auto_timer = None
 current_location_label = None
-llm_busy_label = None
+
+# Replaces generic "LLM is busy" label with something that can show more detail:
+llm_status_label = None
 
 CHARACTERS_DIR = "src/multipersona_chat_app/characters"
 ALL_CHARACTERS = {}
@@ -72,9 +76,7 @@ def refresh_added_characters():
 
 @ui.refreshable
 def show_character_locations():
-    """
-    Display each character's location above the chat.
-    """
+    global character_locations_display
     if character_locations_display is not None:
         character_locations_display.clear()
         char_names = chat_manager.get_character_names()
@@ -330,16 +332,15 @@ async def next_character_response():
         show_character_locations.refresh()
 
 async def generate_character_introduction_message(character_name: str):
-    logger.info(f"Generating introduction message for character: {character_name}")
-
-    (system_prompt, introduction_prompt) = chat_manager.build_introduction_prompts_for_character(character_name)
-
     global llm_busy
     llm_busy = True
-    llm_busy_label.visible = True
-    llm_busy_label.update()
+    llm_status_label.text = f"Generating introduction for {character_name}..."
+    llm_status_label.visible = True
+    llm_status_label.update()
 
     try:
+        (system_prompt, introduction_prompt) = chat_manager.build_introduction_prompts_for_character(character_name)
+
         introduction_response = await run.io_bound(
             introduction_llm_client.generate,
             prompt=introduction_prompt,
@@ -361,14 +362,22 @@ async def generate_character_introduction_message(character_name: str):
         logger.error(f"Error generating introduction for {character_name}: {e}")
     finally:
         llm_busy = False
-        llm_busy_label.visible = False
-        llm_busy_label.update()
+        llm_status_label.text = ""
+        llm_status_label.visible = False
+        llm_status_label.update()
 
     show_chat_display.refresh()
     show_character_locations.refresh()
 
 async def generate_character_message(character_name: str):
+    global llm_busy
     logger.info(f"Generating message for character: {character_name}")
+
+    llm_busy = True
+    llm_status_label.text = f"Generating next message for {character_name}..."
+    llm_status_label.visible = True
+    llm_status_label.update()
+
     msgs = chat_manager.db.get_messages(chat_manager.session_id)
     char_spoken_before = any(m for m in msgs if m["sender"] == character_name and m["message_type"] == "character")
 
@@ -381,11 +390,6 @@ async def generate_character_message(character_name: str):
 
     (system_prompt, user_prompt) = chat_manager.build_prompt_for_character(character_name)
 
-    global llm_busy
-    llm_busy = True
-    llm_busy_label.visible = True
-    llm_busy_label.update()
-
     try:
         interaction = await run.io_bound(
             llm_client.generate,
@@ -393,6 +397,7 @@ async def generate_character_message(character_name: str):
             system=system_prompt
         )
         if isinstance(interaction, Interaction):
+            # Check basic fields
             if (not interaction.purpose.strip()
                 or not interaction.affect.strip()
                 or not interaction.action.strip()):
@@ -405,7 +410,13 @@ async def generate_character_message(character_name: str):
                     visible=True,
                     message_type="character",
                     affect=interaction.affect,
-                    purpose=interaction.purpose
+                    purpose=interaction.purpose,
+                    why_purpose=interaction.why_purpose,
+                    why_affect=interaction.why_affect,
+                    why_action=interaction.why_action,
+                    why_dialogue=interaction.why_dialogue,
+                    why_new_location=interaction.why_new_location,
+                    why_new_clothing=interaction.why_new_clothing
                 )
                 if interaction.new_location.strip():
                     await chat_manager.handle_new_location_for_character(character_name, interaction.new_location, msg_id)
@@ -418,8 +429,9 @@ async def generate_character_message(character_name: str):
         logger.error(f"Error generating message for {character_name}: {e}")
     finally:
         llm_busy = False
-        llm_busy_label.visible = False
-        llm_busy_label.update()
+        llm_status_label.text = ""
+        llm_status_label.visible = False
+        llm_status_label.update()
 
     show_chat_display.refresh()
     show_character_locations.refresh()
@@ -483,8 +495,8 @@ def remove_character(name: str):
 def main_page():
     global user_input, you_name_input, character_dropdown, added_characters_container
     global next_speaker_label, next_button, settings_dropdown, session_dropdown, chat_display
-    global current_location_label, llm_busy_label
-    global ALL_CHARACTERS, ALL_SETTINGS
+    global current_location_label, llm_status_label
+    global ALL_CHARACTERS, ALL_SETTINGS, character_locations_display
 
     logger.debug("Setting up main UI page.")
     ALL_CHARACTERS = get_available_characters(CHARACTERS_DIR)
@@ -524,7 +536,6 @@ def main_page():
                     chat_manager.current_location if chat_manager.current_location else "Not set."
                 ).classes('flex-grow text-gray-700')
 
-            global character_locations_display
             character_locations_display = ui.column().classes('mb-4')
             show_character_locations()
 
@@ -557,9 +568,10 @@ def main_page():
             next_button.enabled = not chat_manager.automatic_running
             next_button.update()
 
-            global llm_busy_label
-            llm_busy_label = ui.label("LLM is busy...").classes('text-red-500')
-            llm_busy_label.visible = False
+            # LLM status
+            global llm_status_label
+            llm_status_label = ui.label("").classes('text-orange-600')
+            llm_status_label.visible = False
 
         with ui.card().style('height: 100vh; display: flex; flex-direction: column;'):
             global chat_display

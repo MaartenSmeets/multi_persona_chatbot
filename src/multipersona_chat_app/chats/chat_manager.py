@@ -1,3 +1,5 @@
+# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/chats/chat_manager.py
+
 import os
 import logging
 from typing import List, Dict, Tuple, Optional
@@ -6,7 +8,11 @@ from db.db_manager import DBManager
 from llm.ollama_client import OllamaClient
 from datetime import datetime
 import yaml
-from templates import INTRODUCTION_TEMPLATE
+from templates import (
+    INTRODUCTION_TEMPLATE,
+    DEFAULT_PROMPT_TEMPLATE,
+    CHARACTER_SYSTEM_PROMPT_TEMPLATE,
+)
 from models.interaction import Interaction
 
 logger = logging.getLogger(__name__)
@@ -33,6 +39,7 @@ class ChatManager:
         existing_sessions = {s['session_id']: s for s in self.db.get_all_sessions()}
         if self.session_id not in existing_sessions:
             self.db.create_session(self.session_id, f"Session {self.session_id}")
+            # Default to "Intimate Setting" if available
             intimate_setting = self.settings.get("Intimate Setting")
             if intimate_setting:
                 self.set_current_setting(
@@ -106,8 +113,6 @@ class ChatManager:
         self.characters[char_name] = char_instance
         current_session_loc = self.db.get_current_location(self.session_id) or ""
         self.db.add_character_to_session(self.session_id, char_name, initial_location=current_session_loc, initial_clothing=char_instance.appearance)
-        # By default, we store the character's initial clothing as the "appearance" field from the YAML
-        # This can be updated later when "new_clothing" events occur.
 
     def remove_character(self, char_name: str):
         if char_name in self.characters:
@@ -125,11 +130,40 @@ class ChatManager:
         if chars:
             self.turn_index = (self.turn_index + 1) % len(chars)
 
-    def add_message(self, sender: str, message: str, visible: bool = True, message_type: str = "user",
-                    affect: Optional[str] = None, purpose: Optional[str] = None) -> Optional[int]:
+    def add_message(self,
+                    sender: str,
+                    message: str,
+                    visible: bool = True,
+                    message_type: str = "user",
+                    affect: Optional[str] = None,
+                    purpose: Optional[str] = None,
+                    why_purpose: Optional[str] = None,
+                    why_affect: Optional[str] = None,
+                    why_action: Optional[str] = None,
+                    why_dialogue: Optional[str] = None,
+                    why_new_location: Optional[str] = None,
+                    why_new_clothing: Optional[str] = None,
+                    new_location: Optional[str] = None,
+                    new_clothing: Optional[str] = None) -> Optional[int]:
         if message_type == "system" or message.strip() == "...":
             return None
-        message_id = self.db.save_message(self.session_id, sender, message, visible, message_type, affect, purpose)
+        message_id = self.db.save_message(
+            self.session_id,
+            sender,
+            message,
+            visible,
+            message_type,
+            affect,
+            purpose,
+            why_purpose,
+            why_affect,
+            why_action,
+            why_dialogue,
+            why_new_location,
+            why_new_clothing,
+            new_location,
+            new_clothing
+        )
         self.check_summarization()
         return message_id
 
@@ -139,92 +173,131 @@ class ChatManager:
                 for m in msgs if m["visible"]]
 
     def build_prompt_for_character(self, character_name: str) -> Tuple[str, str]:
+        """
+        Return a (system_prompt, user_prompt) tuple. If we haven't stored a system_prompt or
+        user_prompt_template for this character yet, generate them using the base templates
+        (CHARACTER_SYSTEM_PROMPT_TEMPLATE + DEFAULT_PROMPT_TEMPLATE) combined with the character's info,
+        then store in DB for future usage.
+        """
+        existing_prompts = self.db.get_character_prompts(self.session_id, character_name)
+        if not existing_prompts:
+            # Generate from the character's details
+            char = self.characters[character_name]
+
+            # We'll assume some default tone to store if not already specified. 
+            # In a real scenario, you might retrieve it from char or some config.
+            tone = "Relaxed and conversational"
+
+            system_prompt = CHARACTER_SYSTEM_PROMPT_TEMPLATE.format(
+                character_name=char.name,
+                character_description=char.character_description,
+                appearance=char.appearance,
+                character_tone=tone
+            )
+
+            user_prompt_template = DEFAULT_PROMPT_TEMPLATE.format(
+                character_name=char.name,
+                character_tone=tone,
+                # placeholders below remain so they can be replaced at runtime
+                setting="{setting}",
+                location="{location}",
+                chat_history_summary="{chat_history_summary}",
+                latest_dialogue="{latest_dialogue}"
+            )
+
+            # Now store them
+            self.db.save_character_prompts(
+                self.session_id,
+                character_name,
+                system_prompt,
+                user_prompt_template
+            )
+            logger.info(f"Created new system & user prompt templates for character '{character_name}' in session '{self.session_id}'.")
+            existing_prompts = {'system_prompt': system_prompt, 'user_prompt_template': user_prompt_template}
+
+        system_prompt = existing_prompts['system_prompt']
+        user_prompt_template = existing_prompts['user_prompt_template']
+
+        # 2) Fill in the dynamic placeholders in user_prompt_template
         visible_history = self.get_visible_history()
         latest_dialogue = visible_history[-1][1] if visible_history else ""
         all_summaries = self.db.get_all_summaries(self.session_id, character_name)
         chat_history_summary = "\n\n".join(all_summaries) if all_summaries else ""
 
+        setting_description = "A tranquil environment."
         if self.current_setting and self.current_setting in self.settings:
             setting_description = self.settings[self.current_setting]['description']
-        else:
-            setting_description = "A tranquil environment."
 
         location = self.get_combined_location()
-        char = self.characters[character_name]
 
-        # Load morality guidelines
-        morality_config_path = os.path.join("src", "multipersona_chat_app", "config", "morality_guidelines.yaml")
-        try:
-            with open(morality_config_path, 'r') as f:
-                morality_data = yaml.safe_load(f)
-                morality_guidelines_template = morality_data.get('morality_guidelines', "")
-                morality_guidelines = morality_guidelines_template.replace("{name}", char.name)
-        except Exception as e:
-            logger.error(f"Failed to load morality guidelines: {e}")
-            morality_guidelines = ""
+        # Now do the final formatting
+        user_prompt = user_prompt_template.replace("{setting}", setting_description)
+        user_prompt = user_prompt.replace("{location}", location)
+        user_prompt = user_prompt.replace("{chat_history_summary}", chat_history_summary)
+        user_prompt = user_prompt.replace("{latest_dialogue}", latest_dialogue)
 
-        system_prompt = (
-            f"{char.system_prompt_template}\n\n"
-            f"Appearance: {char.appearance}\n"
-            f"Character Description: {char.character_description}\n"
-            f"Guidelines: {morality_guidelines}\n\n"
-        )
-
-        user_prompt = char.format_prompt(
-            setting=setting_description,
-            chat_history_summary=chat_history_summary,
-            latest_dialogue=latest_dialogue,
-            name=char.name,
-            location=location
-        )
         return (system_prompt, user_prompt)
 
     def build_introduction_prompts_for_character(self, character_name: str) -> Tuple[str, str]:
-        char = self.characters[character_name]
+        """
+        Return a (system_prompt, user_prompt) tuple for the introduction.
+        If system prompt wasn't stored yet, we'll generate & store it here as well.
+        """
+        existing_prompts = self.db.get_character_prompts(self.session_id, character_name)
+        if not existing_prompts:
+            char = self.characters[character_name]
+            # We'll assume some default tone
+            tone = "Relaxed and conversational"
 
+            system_prompt = CHARACTER_SYSTEM_PROMPT_TEMPLATE.format(
+                character_name=char.name,
+                character_description=char.character_description,
+                appearance=char.appearance,
+                character_tone=tone
+            )
+            user_prompt_template = DEFAULT_PROMPT_TEMPLATE.format(
+                character_name=char.name,
+                character_tone=tone,
+                setting="{setting}",
+                location="{location}",
+                chat_history_summary="{chat_history_summary}",
+                latest_dialogue="{latest_dialogue}"
+            )
+
+            self.db.save_character_prompts(
+                self.session_id,
+                character_name,
+                system_prompt,
+                user_prompt_template
+            )
+            existing_prompts = {'system_prompt': system_prompt, 'user_prompt_template': user_prompt_template}
+
+        system_prompt = existing_prompts['system_prompt']
+
+        # For introduction, we use INTRODUCTION_TEMPLATE as the "user" content
         visible_history = self.get_visible_history()
         latest_dialogue = visible_history[-1][1] if visible_history else ""
         all_summaries = self.db.get_all_summaries(self.session_id, character_name)
         chat_history_summary = "\n\n".join(all_summaries) if all_summaries else ""
 
+        setting_description = "A tranquil environment."
         if self.current_setting and self.current_setting in self.settings:
             setting_description = self.settings[self.current_setting]['description']
-        else:
-            setting_description = "A tranquil environment."
 
         session_loc = self.db.get_current_location(self.session_id) or ""
         if not session_loc and self.current_setting in self.settings:
             session_loc = self.settings[self.current_setting].get('start_location', '')
 
-        morality_config_path = os.path.join("src", "multipersona_chat_app", "config", "morality_guidelines.yaml")
-        try:
-            with open(morality_config_path, 'r') as f:
-                morality_data = yaml.safe_load(f)
-                morality_guidelines_template = morality_data.get('morality_guidelines', "")
-                morality_guidelines = morality_guidelines_template.replace("{name}", char.name)
-        except Exception as e:
-            logger.error(f"Failed to load morality guidelines for introduction: {e}")
-            morality_guidelines = ""
-
-        system_prompt = (
-            f"{char.system_prompt_template}\n\n"
-            f"Appearance: {char.appearance}\n"
-            f"Character Description: {char.character_description}\n"
-            f"Guidelines: {morality_guidelines}\n\n"
-        )
-
-        intro_prompt = INTRODUCTION_TEMPLATE.format(
-            name=char.name,
-            appearance=char.appearance,
-            character_description=char.character_description,
+        user_prompt = INTRODUCTION_TEMPLATE.format(
+            name=character_name,  # for legacy usage if needed
+            character_name=character_name,
+            appearance=self.characters[character_name].appearance,
+            character_description=self.characters[character_name].character_description,
             setting=setting_description,
             location=session_loc,
             chat_history_summary=chat_history_summary,
             latest_dialogue=latest_dialogue
         )
-
-        user_prompt = intro_prompt
-
         return system_prompt, user_prompt
 
     def get_combined_location(self) -> str:
@@ -321,6 +394,7 @@ Now produce a short summary from {character_name}'s viewpoint.
 
         self.db.save_new_summary(self.session_id, character_name, new_summary, covered_up_to_message_id)
 
+        # Hide old messages from the visible log, except for a few lines
         to_hide_ids = [m[0] for m in to_summarize]
         if len(to_hide_ids) > self.lines_to_keep_after_summarization:
             ids_to_hide = to_hide_ids[:-self.lines_to_keep_after_summarization]
