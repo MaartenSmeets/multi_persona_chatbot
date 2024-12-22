@@ -304,16 +304,14 @@ class ChatManager:
 
         history_text = "\n".join(history_lines)
 
-        prompt = f"""You are summarizing the conversation from {character_name}'s perspective. Summarize only the newly presented events from these {self.to_summarize_count} recent messages.
+        prompt = f"""You are summarizing the conversation **from {character_name}'s perspective**. 
+Focus on newly revealed or changed details (feelings, location, clothing, important topic shifts, interpersonal dynamics).
+Do **not** restate the entire environment or old details. Keep it concise and relevant to what {character_name} newly learns or experiences.
 
-Your summary must:
-- Reflect only what {character_name} directly observes or experiences.
-- Note any newly revealed behaviors, location changes, clothing changes, or expressed feelings from {character_name}'s own messages.
-- Exclude repeated content that was previously summarized.
-- Include location changes, new clothing, or new character introductions.
-
-New events for {character_name} to summarize:
+Recent events to summarize:
 {history_text}
+
+Now produce a short summary from {character_name}'s viewpoint.
 """
 
         summarize_llm = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml')

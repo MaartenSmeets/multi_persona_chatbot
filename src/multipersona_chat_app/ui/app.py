@@ -70,6 +70,27 @@ def refresh_added_characters():
     else:
         logger.error("added_characters_container is not initialized.")
 
+@ui.refreshable
+def show_character_locations():
+    """
+    Display each character's location above the chat.
+    """
+    if character_locations_display is not None:
+        character_locations_display.clear()
+        char_names = chat_manager.get_character_names()
+        if not char_names:
+            with character_locations_display:
+                ui.label("No characters added yet.")
+        else:
+            with character_locations_display:
+                for c_name in char_names:
+                    loc = chat_manager.db.get_character_location(chat_manager.session_id, c_name)
+                    if not loc.strip():
+                        loc = "(Unknown location)"
+                    ui.label(f"{c_name} Location: {loc}").classes("text-sm text-gray-700")
+    else:
+        logger.error("character_locations_display is not initialized.")
+
 def update_next_speaker_label():
     ns = chat_manager.next_speaker()
     if ns:
@@ -205,6 +226,7 @@ def load_session(session_id: str):
 
     refresh_added_characters()
     show_chat_display.refresh()
+    show_character_locations.refresh()
     update_next_speaker_label()
     populate_session_dropdown()
     display_current_location()
@@ -224,6 +246,7 @@ def select_setting(event):
             settings_dropdown.value = setting['name']
             settings_dropdown.update()
             display_current_location()
+            show_character_locations.refresh()
         except Exception as pe:
             logger.error(f"Error while setting current setting: {pe}")
             ui.notify(str(pe), type='error')
@@ -292,6 +315,7 @@ async def automatic_conversation():
             await generate_character_message(next_char)
             chat_manager.advance_turn()
             update_next_speaker_label()
+            show_character_locations.refresh()
 
 async def next_character_response():
     if chat_manager.automatic_running:
@@ -303,6 +327,7 @@ async def next_character_response():
         await generate_character_message(next_char)
         chat_manager.advance_turn()
         update_next_speaker_label()
+        show_character_locations.refresh()
 
 async def generate_character_introduction_message(character_name: str):
     logger.info(f"Generating introduction message for character: {character_name}")
@@ -340,6 +365,7 @@ async def generate_character_introduction_message(character_name: str):
         llm_busy_label.update()
 
     show_chat_display.refresh()
+    show_character_locations.refresh()
 
 async def generate_character_message(character_name: str):
     logger.info(f"Generating message for character: {character_name}")
@@ -396,6 +422,7 @@ async def generate_character_message(character_name: str):
         llm_busy_label.update()
 
     show_chat_display.refresh()
+    show_character_locations.refresh()
 
 async def send_user_message():
     message = user_input.value.strip()
@@ -411,6 +438,7 @@ async def send_user_message():
         message_type="user"
     )
     show_chat_display.refresh()
+    show_character_locations.refresh()
     user_input.value = ''
     user_input.update()
 
@@ -431,6 +459,7 @@ async def add_character_from_dropdown(event):
             refresh_added_characters()
             logger.info(f"Character '{char_name}' added to chat.")
             show_chat_display.refresh()
+            show_character_locations.refresh()
         else:
             logger.warning(f"Character '{char_name}' is already added.")
     else:
@@ -448,6 +477,7 @@ def remove_character(name: str):
         del introductions_given[name]
     refresh_added_characters()
     show_chat_display.refresh()
+    show_character_locations.refresh()
     update_next_speaker_label()
 
 def main_page():
@@ -489,10 +519,14 @@ def main_page():
                 ).classes('flex-grow')
 
             with ui.row().classes('w-full items-center mb-2'):
-                ui.label("Current Location:").classes('w-1/4')
+                ui.label("Session-Level Location:").classes('w-1/4')
                 current_location_label = ui.label(
                     chat_manager.current_location if chat_manager.current_location else "Not set."
                 ).classes('flex-grow text-gray-700')
+
+            global character_locations_display
+            character_locations_display = ui.column().classes('mb-4')
+            show_character_locations()
 
             with ui.row().classes('w-full items-center mb-4'):
                 ui.label("Select Character:").classes('w-1/4')

@@ -3,18 +3,8 @@ This module provides templates for system prompts, user prompts, and introductio
 """
 
 DEFAULT_PROMPT_TEMPLATE = r"""
-### Context for Current Interaction ###
-
-{setting}
-
-{location}
-
-{chat_history_summary}
-
-{latest_dialogue}
-
 ### Instructions ###
-You are {name}. Stay true to {name}'s established personality, the setting, and the location. Respond naturally and dynamically to the immediate situation, using the latest dialogue or events as the primary context for your response. Reference earlier dialogue or events if they are more relevant to {name}'s current state or actions. Focus on recent developments, such as a location change or a new character introduction, and avoid repetitive or stale remarks. Let your responses reflect {name}'s evolving emotions, goals, and interactions to keep the scene engaging and realistic. Be elaborate and extensive in your reply.
+You are {name}. Stay true to {name}'s established personality, the setting, and the location. Respond naturally and dynamically to the immediate situation, using the last dialogue or events as the primary context for your response. Reference earlier dialogue or events if they are more relevant to {name}'s current state or actions. Focus on recent developments, such as a location change or a new character introduction, and avoid repetitive or stale remarks. Let your responses reflect {name}'s evolving emotions, goals, and interactions to keep the scene engaging and realistic. Be elaborate and extensive in your reply.
 
 **Response Format (in JSON):**  
 Always produce the following fields in order:  
@@ -50,8 +40,6 @@ Respond in the following JSON structure:
     "new_clothing": "<description of new or removed clothing, or empty if no change>"
 }}
 
-
-
 **Example with no location or clothing change)**:
 ```json
 {{
@@ -76,10 +64,33 @@ Respond in the following JSON structure:
 ```
 
 Let your responses be immersive, character-driven, and adapted to the latest happenings in the conversation. Embrace emotional range, outfit changes, and location shifts when they make sense.
+
+### Context for Current Interaction ###
+
+{setting}
+
+{location}
+
+{chat_history_summary}
+
+{latest_dialogue}
 """
 
 INTRODUCTION_TEMPLATE = r"""
-As {name}, introduce yourself in a detailed and immersive manner, considering the following context but avoid redundancy with the provided information. Your introduction should be engaging, descriptive, and reflective of {name}'s personality, appearance, and recent interactions. Use sensory details, dialogue, and actions to bring {name} to life within the established setting.:
+As {name}, introduce yourself in a detailed and immersive manner, considering the following context but avoid redundancy with the provided information and do not include dialogue. Your introduction should be engaging, descriptive, and reflective of {name}'s personality and appearance. Use sensory details and actions to bring {name} to life within the established setting.
+
+**Background & Traits**:
+- **Character Description**: {character_description}
+- **Appearance Details**: {appearance}
+
+- Detail {name}'s physical appearance, including height, build, hair color/style, and any distinctive features.
+- Describe {name}'s attire, noting how it complements or contrasts with the setting.
+- Highlight any unique characteristics or accessories that make {name} memorable.
+- Illustrate how {name} moves and holds themselves. Are their movements graceful, purposeful, or relaxed?
+
+Do not use markdown in your reply. Stay in one location. You are alone unless other peoples presence or actions are explicitely mentioned in the context. Write in a style that brings {name} to life within the established context. Focus on the moment and on {name}. Not on elabborate storytelling and also not on others.
+
+## Context ##
 
 ### Setting ###
 {setting}
@@ -92,41 +103,4 @@ As {name}, introduce yourself in a detailed and immersive manner, considering th
 
 ### Latest Dialogue ###
 {latest_dialogue}
-
----
-**Background & Traits**:
-- **Character Description**: {character_description}
-- **Appearance Details**: {appearance}
-
-**Guidelines for Introduction (for inspiration, do not need to be strictly followed):**
-
-1. **Set the Scene:**
-   - Describe the environment where {name} is located. Incorporate rich sensory details such as sights, sounds, smells, and textures to create an immersive atmosphere.
-
-2. **Appearance and Attire:**
-   - Detail {name}'s physical appearance, including height, build, hair color/style, and any distinctive features.
-   - Describe {name}'s attire, noting how it complements or contrasts with the setting.
-
-3. **Distinctive Features:**
-   - Highlight any unique characteristics or accessories that make {name} memorable.
-
-4. **Movements and Posture:**
-   - Illustrate how {name} moves and holds themselves. Are their movements graceful, purposeful, or relaxed?
-
-5. **Facial Expressions and Nonverbal Cues:**
-   - Describe {name}'s typical facial expressions and what they convey about their personality.
-
-6. **Personality Through Words and Actions:**
-   - Showcase {name}'s personality traits through their interactions and behaviors, referencing any recent dialogue or events.
-
-7. **Impact on Others:**
-   - Explain how others perceive {name} and the emotions or thoughts {name} evokes in those around them.
-
-8. **Sensory Immersion:**
-   - Incorporate specific sensory details to enhance the vividness of {name}'s introduction.
-
-9. **Overall Tone:**
-   - Present {name} as a multifaceted and engaging character within the described scene, tying in how recent events have shaped their current demeanor or outlook.
-
-Do not use markdown in your reply. Write in a narrative style that brings {name} to life within the established context.   
 """
