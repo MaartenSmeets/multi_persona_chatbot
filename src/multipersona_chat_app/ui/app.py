@@ -76,7 +76,7 @@ def refresh_added_characters():
                     ui.label(char_name).classes('flex-grow')
                     ui.button(
                         'Remove',
-                        on_click=lambda _, name=char_name: remove_character(name),
+                        on_click=lambda _, name=char_name: asyncio.create_task(remove_character_async(name)),
                     ).classes('ml-2 bg-red-500 text-white')
         logger.info("Added characters refreshed in UI.")
     else:
@@ -264,7 +264,7 @@ def load_session(session_id: str):
     display_current_location()
     logger.info(f"Session loaded: {session_id}")
 
-def select_setting(event):
+async def select_setting(event):
     chosen_name = event.value
     logger.info(f"Setting selected: {chosen_name}")
     setting = next((s for s in ALL_SETTINGS if s['name'] == chosen_name), None)
@@ -282,19 +282,19 @@ def select_setting(event):
             show_character_clothing.refresh()
         except Exception as pe:
             logger.error(f"Error while setting current setting: {pe}")
-            # Use run_sync to safely notify from background task
-            ui.run_sync(lambda: ui.notify(str(pe), type='error'))
+            # Notify the user
+            await ui.notify(str(pe), type='error')
     else:
         logger.warning(f"Selected setting '{chosen_name}' not found.")
 
-def toggle_automatic_chat(e):
+async def toggle_automatic_chat(e):
     state = "enabled" if e.value else "disabled"
     logger.info(f"Automatic chat toggled {state}.")
     if e.value:
         if not chat_manager.get_character_names():
             logger.warning("No characters added. Cannot start automatic chat.")
-            # Use run_sync to safely notify from background task
-            ui.run_sync(lambda: ui.notify("No characters added. Cannot start automatic chat.", type='warning'))
+            # Notify the user
+            await ui.notify("No characters added. Cannot start automatic chat.", type='warning')
             e.value = False
             return
         chat_manager.start_automatic_chat()
@@ -440,8 +440,8 @@ async def generate_character_message(character_name: str):
         prompts = chat_manager.db.get_character_prompts(chat_manager.session_id, character_name)
         if not prompts:
             logger.error(f"Failed to generate prompts for '{character_name}'. Aborting message generation.")
-            # Use run_sync to safely notify from background task
-            ui.run_sync(lambda: ui.notify(f"Failed to generate prompts for {character_name}.", type='error'))
+            # Notify the user
+            await ui.notify(f"Failed to generate prompts for {character_name}.", type='error')
             llm_busy = False
             llm_status_label.text = ""
             llm_status_label.visible = False
@@ -545,7 +545,7 @@ async def add_character_from_dropdown(event):
             show_character_locations.refresh()
             show_character_clothing.refresh()
             # Automatically generate specific prompts for the added character
-            # await generate_character_specific_prompts(char_name)
+            await generate_character_specific_prompts(char_name)
         else:
             logger.warning(f"Character '{char_name}' is already added.")
     else:
@@ -555,7 +555,7 @@ async def add_character_from_dropdown(event):
     character_dropdown.value = None
     character_dropdown.update()
 
-def remove_character(name: str):
+async def remove_character_async(name: str):
     logger.info(f"Removing character: {name}")
     chat_manager.remove_character(name)
     chat_manager.db.remove_character_from_session(chat_manager.session_id, name)
@@ -630,17 +630,17 @@ async def generate_character_specific_prompts(char_name: str):
                     response.dynamic_prompt_template
                 )
                 logger.info(f"Successfully stored system & dynamic prompts for character '{char_name}'.")
-                # Use run_sync to safely notify from background task
-                ui.run_sync(lambda: ui.notify(f"New prompts for {char_name} have been generated and stored.", type='positive'))
+                # Notify the user
+                await ui.notify(f"New prompts for {char_name} have been generated and stored.", type='positive')
             else:
                 logger.warning(f"No response or invalid output from LLM for {char_name}.")
-                # Use run_sync to safely notify from background task
-                ui.run_sync(lambda: ui.notify(f"Failed to generate prompts for {char_name}.", type='warning'))
+                # Notify the user
+                await ui.notify(f"Failed to generate prompts for {char_name}.", type='warning')
 
         except Exception as e:
             logger.error(f"Error while generating character-specific prompts for {char_name}: {e}")
-            # Use run_sync to safely notify from background task
-            ui.run_sync(lambda: ui.notify(f"Error: {e}", type='error'))
+            # Notify the user
+            await ui.notify(f"Error: {e}", type='error')
         finally:
             llm_busy = False
             llm_status_label.text = ""

@@ -59,7 +59,7 @@ Below are the rules that should guide {character_name}'s interactions. They shou
 
 #### Sample JSON Output
 
-The system prompt should include a sample JSON output template that guides the model on how to structure {character_name}'s responses.
+The system prompt should include a sample JSON output template that guides the model on how to structure {character_name}'s responses. It is important the system prompt is very specific in this and mentions all fields in correct order and how to fill them!
 
 ```json
 {{ 
@@ -80,7 +80,7 @@ The system prompt should include a sample JSON output template that guides the m
 
 ### dynamic prompt template
 
-Create a reusable user prompt template that has placeholders for these context pieces and is tailored to {character_name}. This template should add to the system prompt and will be used to provide context to guide interactions. It should instruct to generate an interaction (JSON fields specified in system prompt) based on the context.
+Create a reusable user prompt template that has placeholders for these context pieces and is tailored to {character_name}. The placeholders will be replaced with a header and content when used so additional headers do not need to be added. This template should add to the system prompt and will be used to provide context to guide interactions. It should instruct to generate an interaction (JSON fields specified in system prompt) based on the context.
 
 {{setting}}
 
