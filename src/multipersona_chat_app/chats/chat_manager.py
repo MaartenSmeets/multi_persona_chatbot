@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 class ChatManager:
     def __init__(self, you_name: str = "You", session_id: Optional[str] = None, settings: List[Dict] = []):
+
         self.characters: Dict[str, Character] = {}
         self.turn_index = 0
         self.automatic_running = False
@@ -170,52 +171,14 @@ class ChatManager:
                 for m in msgs if m["visible"]]
 
     def build_prompt_for_character(self, character_name: str) -> Tuple[str, str]:
-        """
-        Return a (system_prompt, user_prompt) tuple. If we haven't stored a system_prompt or
-        user_prompt_template for this character yet, generate them using the base templates
-        (CHARACTER_SYSTEM_PROMPT_TEMPLATE + DEFAULT_PROMPT_TEMPLATE) combined with the character's info,
-        then store in DB for future usage.
-        """
         existing_prompts = self.db.get_character_prompts(self.session_id, character_name)
         if not existing_prompts:
-            # Generate from the character's details
-            char = self.characters[character_name]
-
-            # We'll assume some default tone to store if not already specified. 
-            # In a real scenario, you might retrieve it from char or some config.
-            tone = "Relaxed and conversational"
-
-            system_prompt = CHARACTER_SYSTEM_PROMPT_TEMPLATE.format(
-                character_name=char.name,
-                character_description=char.character_description,
-                appearance=char.appearance,
-                character_tone=tone
-            )
-
-            user_prompt_template = DEFAULT_PROMPT_TEMPLATE.format(
-                character_name=char.name,
-                character_tone=tone,
-                # placeholders below remain so they can be replaced at runtime
-                setting="{setting}",
-                location="{location}",
-                chat_history_summary="{chat_history_summary}",
-                latest_dialogue="{latest_dialogue}"
-            )
-
-            # Now store them
-            self.db.save_character_prompts(
-                self.session_id,
-                character_name,
-                system_prompt,
-                user_prompt_template
-            )
-            logger.info(f"Created new system & user prompt templates for character '{character_name}' in session '{self.session_id}'.")
-            existing_prompts = {'system_prompt': system_prompt, 'user_prompt_template': user_prompt_template}
+            raise ValueError(f"Existing prompts not found in the session.")
 
         system_prompt = existing_prompts['system_prompt']
-        user_prompt_template = existing_prompts['user_prompt_template']
+        dynamic_prompt_template = existing_prompts['dynamic_prompt_template']
 
-        # 2) Fill in the dynamic placeholders in user_prompt_template
+        # 2) Fill in the dynamic placeholders in dynamic_prompt_template
         visible_history = self.get_visible_history()
         latest_dialogue = visible_history[-1][1] if visible_history else ""
         all_summaries = self.db.get_all_summaries(self.session_id, character_name)
@@ -228,12 +191,12 @@ class ChatManager:
         location = self.get_combined_location()
 
         # Now do the final formatting
-        user_prompt = user_prompt_template.replace("{setting}", setting_description)
-        user_prompt = user_prompt.replace("{location}", location)
-        user_prompt = user_prompt.replace("{chat_history_summary}", chat_history_summary)
-        user_prompt = user_prompt.replace("{latest_dialogue}", latest_dialogue)
+        dynamic_prompt_template = dynamic_prompt_template.replace("{setting}", setting_description)
+        dynamic_prompt_template = dynamic_prompt_template.replace("{location}", location)
+        dynamic_prompt_template = dynamic_prompt_template.replace("{chat_history_summary}", chat_history_summary)
+        dynamic_prompt_template = dynamic_prompt_template.replace("{latest_dialogue}", latest_dialogue)
 
-        return (system_prompt, user_prompt)
+        return (system_prompt, dynamic_prompt_template)
 
     def build_introduction_prompts_for_character(self, character_name: str) -> Tuple[str, str]:
         """
@@ -398,19 +361,26 @@ Now produce a short summary from {character_name}'s viewpoint.
         return INTRODUCTION_TEMPLATE
 
     async def handle_new_location_for_character(self, character_name: str, new_location: str, triggered_message_id: int):
-        self.db.update_character_location(
+        updated = self.db.update_character_location(
             self.session_id,
             character_name,
             new_location,
             triggered_by_message_id=triggered_message_id
         )
-        logger.info(f"Character '{character_name}' moved/updated location to '{new_location}'.")
+        if updated:
+            logger.info(f"Character '{character_name}' moved/updated location to '{new_location}'.")
+        else:
+            logger.debug(f"No location update needed for '{character_name}'.")
 
     async def handle_new_clothing_for_character(self, character_name: str, new_clothing: str, triggered_message_id: int):
-        self.db.update_character_clothing(
+        updated = self.db.update_character_clothing(
             self.session_id,
             character_name,
             new_clothing,
             triggered_by_message_id=triggered_message_id
         )
-        logger.info(f"Character '{character_name}' updated clothing to '{new_clothing}'.")
+        if updated:
+            logger.info(f"Character '{character_name}' updated clothing to '{new_clothing}'.")
+        else:
+            logger.debug(f"No clothing update needed for '{character_name}'.")
+

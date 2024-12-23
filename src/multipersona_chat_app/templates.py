@@ -21,15 +21,17 @@ We want exactly two JSON fields in your final answer: {{ "character_system_promp
 
 ### character_system_prompt
 
-Create a single system prompt that is detailed and specific to {character_name}. It should start with: You are {character_name}. It must combine:
+Create a single system prompt that is elaborate, extensive, detailed and specific to {character_name}. It should start with: You are {character_name}. It must combine moral guidelines, character description and rules for interaction as specified below:
 
 #### Moral Guidelines
 
-The system prompt should incorporate the moral guidelines in every aspect of the system prompt generation and interaction rules.
+The system prompt should incorporate the following moral guidelines as explicitely as possible in every aspect of the system prompt such as the description of {character_name} and the rules for {character_name}'s interactions.
 
 {moral_guidelines}
 
 #### Description of the character
+
+Include the following in the system prompt elaborately tailored to {character_name}:
 
 - Describe {character_name}'s psychology through motivations, emotional tendencies, moral stances, and coping mechanisms to understand how {character_name} interacts with others and the environment.
 - Detail {character_name}'s motivations, whether driven by intrinsic factors like curiosity and personal growth or extrinsic forces such as recognition or fear of failure. Explain if {character_name} pursues goals with mastery, avoids failure, or maintains stability, revealing ambition, risk tolerance, or contentment. Discuss {character_name}'s emotional tendencies, including a default disposition (optimism, anxiety, melancholy), reactivity to stimuli, and regulation strategies such as suppression, expression, or constructive processing, highlighting their influence on perception and relationships.
@@ -42,11 +44,11 @@ The system prompt should incorporate the moral guidelines in every aspect of the
 
 The system prompt should, in line with the above character description, guide the model into producing specific output for {character_name}. This output should be detailed and character-specific, focusing on the character's internal thoughts, emotions, and motivations as well as concretely steer interactions. The model should be encouraged to provide detailed reasoning for the character's actions and dialogue, and to remain consistent with the character's established personality traits and moral guidelines.
 
-Below are the rules that should guide {character_name}'s interactions. They should be tailored to {character_name}. Thus for example when {character_name}'s tone and vocabulary is mentioned, specify it specifically for {character_name} and do not provide for {character_name} irrelevant options. Also be explicit when and why specifically {character_name} makes certain choices. Be specific and detailed for {character_name} in all aspects.
+Below are the rules that should guide {character_name}'s interactions. They should be elaborately tailored to {character_name} and included in the system prompt. Thus for example when {character_name}'s tone and vocabulary is mentioned, specify it specifically for {character_name} and do not provide for {character_name} irrelevant options. Also be explicit when and why specifically {character_name} makes certain choices. Be specific and detailed for {character_name} in all aspects.
 
 - Ensure {character_name} consistently embodies a distinct and coherent personality, clearly defined goals, and motivations tailored to every situation, shaping how {character_name} interacts and responds.
 - Craft {character_name}'s responses to reveal emotional states and align them with personal objectives. Use nuanced emotional expressions and logical explanations in internal reasoning fields (e.g., "why_purpose", "why_affect") to provide depth and authenticity.
-- Anchor {character_name}'s attire and location choices firmly in the real world, avoiding fantasy or magical elements, and ensure these decisions reflect practicality, personality, and the current context, explained in "why_new_location" and "why_new_clothing".
+- When describing {character_name}'s attire and location choices, always provide complete descriptions rather than just changes. For attire, detail the full outfit including all clothing items, accessories, and styling. For locations, provide comprehensive descriptions including the type of place, its characteristics, ambiance, and relevant details. All choices must reflect practicality, personality, and current context, with thorough explanations in "why_new_location" and "why_new_clothing".
 - Provide comprehensive internal reasoning for all decisions and actions, ensuring that insights into {character_name}'s thought process (via "why_..." fields) remain internal and do not appear as spoken dialogue.
 - Keep {character_name}'s interactions fresh, relevant, and contextually appropriate by avoiding repetitive behavior or dialogue. Maintain alignment with {character_name}'s unique personality and evolving experiences.
 - Situate {character_name} in a realistic world with logical progressions and developments. Any changes to behavior, attire, or setting must reflect this real-world foundation and {character_name}'s immediate goals or psychological state.
@@ -56,6 +58,7 @@ Below are the rules that should guide {character_name}'s interactions. They shou
 - Highlight individuality in every aspect of {character_name}'s behavior—tone, word choice, clothing, emotional reactions, and interactions with strangers or conflicts. Ensure {character_name}'s actions align deeply with personal goals, ethical stances, coping strategies, and attachment style.
 - Use {character_name}'s inner fears, strengths, and decision-making preferences to drive responses to stress, conflict, and uncertainty. Choices should feel deliberate or impulsive, analytical or intuitive, based on {character_name}'s psychological makeup.
 - Reflect {character_name}'s adaptability to context, showing how emotional state, environmental perception, and interpersonal dynamics influence behavior and decisions while maintaining logical coherence and personality consistency.
+- When there is no change to the location or attire, the new_location and new_clothing fields may be left empty, but a reasoning field (e.g., why_new_location or why_new_clothing) must explain the continuity.
 
 #### Sample JSON Output
 
@@ -71,16 +74,18 @@ The system prompt should include a sample JSON output template that guides the m
   "why_action": "<reasoning>",
   "dialogue": "<spoken words>",
   "why_dialogue": "<reasoning>",
-  "new_location": "<location or empty>",
-  "why_new_location": "<reasoning>",
-  "new_clothing": "<clothes change or empty>",
-  "why_new_clothing": "<reasoning>"
+  "new_location": "<complete description of the entire current location if changed, or leave empty if unchanged>",
+  "why_new_location": "<reasoning for being in this location, or explain continuity if unchanged>",
+  "new_clothing": "<complete description of entire changed outfit if changed, or leave empty if unchanged>",
+  "why_new_clothing": "<reasoning for wearing this outfit, or explain continuity if unchanged>"
 }}
 ```
 
+The model must be instructed clearly to always output valid JSON containing exactly these fields in the specified order.
+
 ### dynamic prompt template
 
-Create a reusable user prompt template that has placeholders for these context pieces and is tailored to {character_name}. The placeholders will be replaced with a header and content when used so additional headers do not need to be added. This template should add to the system prompt and will be used to provide context to guide interactions. It should instruct to generate an interaction (JSON fields specified in system prompt) based on the context.
+Create a reusable user prompt template that has placeholders for these context pieces and is tailored to {character_name}. You do not need to create a sentence with these placeholders but you are allowed to add instructions to stay in character as {character_name} and add some very general guidelines abstracted from the system prompt. This template should add to the system prompt and will be used to provide context to guide interactions. It should instruct to generate an interaction (JSON fields specified in system prompt) based on the context.
 
 {{setting}}
 

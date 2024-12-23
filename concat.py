@@ -37,15 +37,15 @@ def concatenate_files(output_file, root_dir, exclude_dirs=None, include_yaml_sub
                         output.write(f"# Error reading {file_path}: {e}\n\n")
                 
                 # Handle YAML files from any 'config' folder in the path
-                if filename.endswith(('.yaml', '.yml')) and include_yaml_subfolder in dirpath.split(os.sep):
-                    if os.path.getsize(file_path) > 0:
-                        output.write(f"# YAML File: {file_path}\n")
-                        try:
-                            with open(file_path, 'r', encoding='utf-8') as file:
-                                content = file.read()
-                                output.write(content + '\n\n')
-                        except Exception as e:
-                            output.write(f"# Error reading {file_path}: {e}\n\n")
+                #if filename.endswith(('.yaml', '.yml')) and include_yaml_subfolder in dirpath.split(os.sep):
+                #    if os.path.getsize(file_path) > 0:
+                #        output.write(f"# YAML File: {file_path}\n")
+                #        try:
+                #            with open(file_path, 'r', encoding='utf-8') as file:
+                #                content = file.read()
+                #                output.write(content + '\n\n')
+                #        except Exception as e:
+                #            output.write(f"# Error reading {file_path}: {e}\n\n")
 
 if __name__ == "__main__":
     output_file = "concatenated_files.py"

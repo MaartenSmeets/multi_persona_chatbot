@@ -47,9 +47,7 @@ ALL_SETTINGS = []
 introductions_given = {}
 llm_busy = False
 
-# -----------------------------
 # A queue for user notifications
-# -----------------------------
 notification_queue = asyncio.Queue()
 
 def consume_notifications():
@@ -58,9 +56,8 @@ def consume_notifications():
     It checks the queue and displays notifications in the current UI context.
     """
     while not notification_queue.empty():
-        # Use get_nowait() (instead of await queue.get()) since this function is synchronous.
         message, msg_type = notification_queue.get_nowait()
-        ui.notify(message, type=msg_type)  # Safe in main UI context
+        ui.notify(message, type=msg_type)
 
 def init_chat_manager(session_id: str, settings: List[Dict]):
     global chat_manager, llm_client, introduction_llm_client
@@ -265,7 +262,6 @@ def load_session(session_id: str):
         if c_name in ALL_CHARACTERS:
             chat_manager.add_character(c_name, ALL_CHARACTERS[c_name])
             introductions_given[c_name] = False
-            # Automatically generate specific prompts for the character
             asyncio.create_task(generate_character_specific_prompts(c_name))
         else:
             logger.warning(f"Character '{c_name}' found in DB but not in ALL_CHARACTERS.")
@@ -297,7 +293,6 @@ async def select_setting(event):
             show_character_clothing.refresh()
         except Exception as pe:
             logger.error(f"Error while setting current setting: {pe}")
-            # Put the message into the notification queue
             await notification_queue.put((str(pe), 'error'))
     else:
         logger.warning(f"Selected setting '{chosen_name}' not found.")
@@ -478,10 +473,12 @@ async def generate_character_message(character_name: str):
     user_prompt = prompts['dynamic_prompt_template']
 
     try:
+        # IMPORTANT: use_cache=False to force a fresh LLM response each time
         interaction = await run.io_bound(
             llm_client.generate,
             prompt=user_prompt,
-            system=system_prompt
+            system=system_prompt,
+            use_cache=False  # Force new response to avoid repetitive loops
         )
         if isinstance(interaction, Interaction):
             if (not interaction.purpose.strip()
@@ -502,7 +499,9 @@ async def generate_character_message(character_name: str):
                     why_action=interaction.why_action,
                     why_dialogue=interaction.why_dialogue,
                     why_new_location=interaction.why_new_location,
-                    why_new_clothing=interaction.why_new_clothing
+                    why_new_clothing=interaction.why_new_clothing,
+                    new_location=interaction.new_location if interaction.new_location.strip() else None,
+                    new_clothing=interaction.new_clothing if interaction.new_clothing.strip() else None
                 )
                 if interaction.new_location.strip():
                     await chat_manager.handle_new_location_for_character(character_name, interaction.new_location, msg_id)
@@ -583,10 +582,6 @@ async def remove_character_async(name: str):
     update_next_speaker_label()
 
 async def generate_character_specific_prompts(char_name: str):
-    """
-    Automatically generates and stores character-specific prompts 
-    when a character is added or loaded into a session.
-    """
     global llm_busy
     if char_name not in chat_manager.characters:
         logger.warning(f"Character '{char_name}' not found in chat_manager. Aborting generation.")
@@ -639,7 +634,6 @@ async def generate_character_specific_prompts(char_name: str):
                     response.dynamic_prompt_template
                 )
                 logger.info(f"Successfully stored system & dynamic prompts for character '{char_name}'.")
-                # Put the success notification in the queue
                 await notification_queue.put((f"New prompts for {char_name} have been generated and stored.", 'positive'))
             else:
                 logger.warning(f"No response or invalid output from LLM for {char_name}.")
@@ -789,16 +783,8 @@ def start_ui():
     auto_timer = ui.timer(interval=2.0, callback=lambda: asyncio.create_task(automatic_conversation()), active=False)
     logger.info("UI timer for automatic conversation set up.")
 
-    # -----------------------------
     # Timer to handle notifications
-    # -----------------------------
-    # Note: It's a *synchronous* function, so no async def here
     ui.timer(1.0, consume_notifications, active=True)
 
     ui.run(reload=False)
     logger.info("UI is running.")
-
-
-# Entry point
-if __name__ == "__main__":
-    start_ui()

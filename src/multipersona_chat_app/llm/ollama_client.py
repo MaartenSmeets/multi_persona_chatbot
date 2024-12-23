@@ -1,5 +1,3 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/llm/ollama_client.py
-
 import requests
 import logging
 from typing import Optional, Type
@@ -42,22 +40,24 @@ class OllamaClient:
         prompt: str,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
-        system: Optional[str] = None
+        system: Optional[str] = None,
+        use_cache: bool = True
     ) -> Optional[BaseModel or str]:
         model_name = self.config.get('model_name')
 
-        # Check cache first
-        cached_response = self.cache_manager.get_cached_response(prompt, model_name)
-        if cached_response is not None:
-            logger.info("Returning cached LLM response.")
-            if self.output_model:
-                try:
-                    return self.output_model.parse_raw(cached_response)
-                except:
-                    logger.error("Error parsing cached response. Treating as invalid and returning None.")
-                    return None
-            else:
-                return cached_response
+        # Allow skipping cache if needed
+        if use_cache:
+            cached_response = self.cache_manager.get_cached_response(prompt, model_name)
+            if cached_response is not None:
+                logger.info("Returning cached LLM response.")
+                if self.output_model:
+                    try:
+                        return self.output_model.parse_raw(cached_response)
+                    except:
+                        logger.error("Error parsing cached response. Treating as invalid and returning None.")
+                        return None
+                else:
+                    return cached_response
 
         headers = {
             'Content-Type': 'application/json',
@@ -132,13 +132,16 @@ class OllamaClient:
                                     # Log the structured output so we can see it in the logs:
                                     logger.info("Final parsed output (structured) stored in cache.")
                                     logger.info(f"Structured Output: {parsed_output.dict()}")
-                                    self.cache_manager.store_response(prompt, model_name, output)
+                                    # Store in cache if use_cache is True
+                                    if use_cache:
+                                        self.cache_manager.store_response(prompt, model_name, output)
                                     return parsed_output
                                 except Exception as e:
                                     logger.error(f"Error parsing model output: {e}")
                                     return None
                             else:
-                                self.cache_manager.store_response(prompt, model_name, output)
+                                if use_cache:
+                                    self.cache_manager.store_response(prompt, model_name, output)
                                 logger.info("Final unstructured output stored in cache.")
                                 return output
 

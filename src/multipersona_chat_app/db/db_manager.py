@@ -127,20 +127,7 @@ class DBManager:
         except sqlite3.OperationalError:
             pass
 
-        # Create character_prompts table
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS character_prompts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                character_name TEXT NOT NULL,
-                system_prompt TEXT NOT NULL,
-                user_prompt_template TEXT NOT NULL,
-                FOREIGN KEY(session_id) REFERENCES sessions(session_id),
-                UNIQUE(session_id, character_name)
-            )
-        ''')
-
-        # NEW: Create clothing_history table for storing chronological clothing changes
+        # Create clothing_history table for storing chronological clothing changes
         c.execute('''
             CREATE TABLE IF NOT EXISTS clothing_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -154,9 +141,22 @@ class DBManager:
             )
         ''')
 
+        # Create character_prompts table WITHOUT user_prompt_template
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS character_prompts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                character_name TEXT NOT NULL,
+                system_prompt TEXT NOT NULL,
+                dynamic_prompt_template TEXT NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES sessions(session_id),
+                UNIQUE(session_id, character_name)
+            )
+        ''')
+
         conn.commit()
         conn.close()
-        logger.info("Database initialized with required tables (including new location/clothing histories).")
+        logger.info("Database initialized with required tables (user_prompt_template removed).")
 
     # Session Management
 
@@ -181,7 +181,6 @@ class DBManager:
         c.execute('DELETE FROM session_characters WHERE session_id = ?', (session_id,))
         c.execute('DELETE FROM character_prompts WHERE session_id = ?', (session_id,))
         c.execute('DELETE FROM clothing_history WHERE session_id = ?', (session_id,))
-        c.execute('DELETE FROM sessions WHERE session_id = ?', (session_id,))
         conn.commit()
         conn.close()
         logger.info(f"Session with ID '{session_id}' and all associated data deleted.")
@@ -346,9 +345,13 @@ class DBManager:
         conn.close()
         return {row[0]: (row[1] if row[1] else "") for row in rows}
 
-    def update_character_location(self, session_id: str, character_name: str, new_location: str, triggered_by_message_id: Optional[int] = None):
+    def update_character_location(self, session_id: str, character_name: str, new_location: str, triggered_by_message_id: Optional[int] = None) -> bool:
         old_location = self.get_character_location(session_id, character_name)
         updated_location = merge_location_update(old_location, new_location)
+
+        if updated_location == old_location:
+            logger.debug(f"No location change for character '{character_name}' in session '{session_id}'. Skipping update.")
+            return False  # No update needed
 
         conn = self._ensure_connection()
         c = conn.cursor()
@@ -373,9 +376,15 @@ class DBManager:
             conn.commit()
             conn.close()
 
-    def update_character_clothing(self, session_id: str, character_name: str, new_clothing: str, triggered_by_message_id: Optional[int] = None):
+        return True  # Update occurred
+
+    def update_character_clothing(self, session_id: str, character_name: str, new_clothing: str, triggered_by_message_id: Optional[int] = None) -> bool:
         old_clothing = self.get_character_clothing(session_id, character_name)
         updated_clothing = merge_clothing_update(old_clothing, new_clothing)
+
+        if updated_clothing == old_clothing:
+            logger.debug(f"No clothing change for character '{character_name}' in session '{session_id}'. Skipping update.")
+            return False  # No update needed
 
         conn = self._ensure_connection()
         c = conn.cursor()
@@ -402,6 +411,8 @@ class DBManager:
             ''', (session_id, character_name, updated_clothing, triggered_by_message_id))
             conn.commit()
             conn.close()
+
+        return True  # Update occurred
 
     # Messages
     def save_message(self,
@@ -541,31 +552,34 @@ class DBManager:
 
     # Character Prompts
     def get_character_prompts(self, session_id: str, character_name: str) -> Optional[Dict[str, str]]:
-        """Fetches the stored system_prompt and user_prompt_template for this character in this session."""
+        """Fetches the stored system_prompt and dynamic_prompt_template for this character in this session."""
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
-            SELECT system_prompt, user_prompt_template
+            SELECT system_prompt, dynamic_prompt_template
             FROM character_prompts
             WHERE session_id = ? AND character_name = ?
         ''', (session_id, character_name))
         row = c.fetchone()
         conn.close()
         if row:
-            return {'system_prompt': row[0], 'user_prompt_template': row[1]}
+            return {
+                'system_prompt': row[0],
+                'dynamic_prompt_template': row[1]
+            }
         return None
 
-    def save_character_prompts(self, session_id: str, character_name: str, system_prompt: str, user_prompt_template: str):
+    def save_character_prompts(self, session_id: str, character_name: str, system_prompt: str, dynamic_prompt_template: str):
         """Inserts or replaces the character prompts for a given (session, character)."""
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
-            INSERT INTO character_prompts (session_id, character_name, system_prompt, user_prompt_template)
+            INSERT INTO character_prompts (session_id, character_name, system_prompt, dynamic_prompt_template)
             VALUES (?, ?, ?, ?)
             ON CONFLICT(session_id, character_name)
             DO UPDATE SET system_prompt=excluded.system_prompt,
-                          user_prompt_template=excluded.user_prompt_template
-        ''', (session_id, character_name, system_prompt, user_prompt_template))
+                          dynamic_prompt_template=excluded.dynamic_prompt_template
+        ''', (session_id, character_name, system_prompt, dynamic_prompt_template))
         conn.commit()
         conn.close()
-        logger.info(f"Stored system_prompt and user_prompt_template for character '{character_name}' in session '{session_id}'.")
+        logger.info(f"Stored system_prompt and dynamic_prompt_template for character '{character_name}' in session '{session_id}'.")
