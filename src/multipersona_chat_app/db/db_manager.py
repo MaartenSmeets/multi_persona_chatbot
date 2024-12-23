@@ -369,7 +369,7 @@ class DBManager:
             conn = self._ensure_connection()
             c = conn.cursor()
             c.execute('INSERT INTO location_history (session_id, location, triggered_by_message_id) VALUES (?, ?, ?)',
-                      (session_id, f"{character_name} is now {updated_location}", triggered_by_message_id))
+                      (session_id, f"{updated_location}", triggered_by_message_id))
             conn.commit()
             conn.close()
 

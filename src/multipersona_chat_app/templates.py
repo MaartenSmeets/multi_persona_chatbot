@@ -79,7 +79,7 @@ Appearance: {appearance}
 We also have moral guidelines: {moral_guidelines}
 
 ### WHAT TO PRODUCE
-We want exactly four JSON fields in your final answer: {{ "character_system_prompt": "...", "dynamic_prompt_template": "...", "introduction_description": "...", "introduction_variables": {{"start_location": "...", "start_clothing": "..."}} }}
+We want exactly two JSON fields in your final answer: {{ "character_system_prompt": "...", "dynamic_prompt_template": "..." }}
 
 1) character_system_prompt
 Create a single system prompt that is detailed and specific to {character_name}. It must combine:

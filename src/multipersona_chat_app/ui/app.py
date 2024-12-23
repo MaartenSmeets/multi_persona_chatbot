@@ -91,9 +91,28 @@ def show_character_locations():
                     loc = chat_manager.db.get_character_location(chat_manager.session_id, c_name)
                     if not loc.strip():
                         loc = "(Unknown location)"
-                    ui.label(f"{c_name} Location: {loc}").classes("text-sm text-gray-700")
+                    ui.label(f"{c_name}'s location: {loc}").classes("text-sm text-gray-700")
     else:
         logger.error("character_locations_display is not initialized.")
+
+@ui.refreshable
+def show_character_clothing():
+    global character_clothing_display
+    if character_clothing_display is not None:
+        character_clothing_display.clear()
+        char_names = chat_manager.get_character_names()
+        if not char_names:
+            with character_clothing_display:
+                ui.label("No characters added yet.")
+        else:
+            with character_clothing_display:
+                for c_name in char_names:
+                    loc = chat_manager.db.get_character_clothing(chat_manager.session_id, c_name)
+                    if not loc.strip():
+                        loc = "(Unknown clothing)"
+                    ui.label(f"{c_name}'s clothing: {loc}").classes("text-sm text-gray-700")
+    else:
+        logger.error("character_clothing_display is not initialized.")
 
 def update_next_speaker_label():
     ns = chat_manager.next_speaker()
@@ -231,6 +250,7 @@ def load_session(session_id: str):
     refresh_added_characters()
     show_chat_display.refresh()
     show_character_locations.refresh()
+    show_character_clothing.refresh()
     update_next_speaker_label()
     populate_session_dropdown()
     display_current_location()
@@ -251,6 +271,7 @@ def select_setting(event):
             settings_dropdown.update()
             display_current_location()
             show_character_locations.refresh()
+            show_character_clothing.refresh()
         except Exception as pe:
             logger.error(f"Error while setting current setting: {pe}")
             ui.notify(str(pe), type='error')
@@ -320,6 +341,7 @@ async def automatic_conversation():
             chat_manager.advance_turn()
             update_next_speaker_label()
             show_character_locations.refresh()
+            show_character_clothing.refresh()
 
 async def next_character_response():
     if chat_manager.automatic_running:
@@ -332,6 +354,7 @@ async def next_character_response():
         chat_manager.advance_turn()
         update_next_speaker_label()
         show_character_locations.refresh()
+        show_character_clothing.refresh()
 
 async def generate_character_introduction_message(character_name: str):
     global llm_busy
@@ -398,6 +421,7 @@ async def generate_character_introduction_message(character_name: str):
     # Refresh UI components
     show_chat_display.refresh()
     show_character_locations.refresh()
+    show_character_clothing.refresh()
 
 async def generate_character_message(character_name: str):
     global llm_busy
@@ -465,6 +489,7 @@ async def generate_character_message(character_name: str):
 
     show_chat_display.refresh()
     show_character_locations.refresh()
+    show_character_clothing.refresh()
 
 async def send_user_message():
     message = user_input.value.strip()
@@ -481,6 +506,7 @@ async def send_user_message():
     )
     show_chat_display.refresh()
     show_character_locations.refresh()
+    show_character_clothing.refresh()
     user_input.value = ''
     user_input.update()
 
@@ -502,6 +528,7 @@ async def add_character_from_dropdown(event):
             logger.info(f"Character '{char_name}' added to chat.")
             show_chat_display.refresh()
             show_character_locations.refresh()
+            show_character_clothing.refresh()
         else:
             logger.warning(f"Character '{char_name}' is already added.")
     else:
@@ -520,13 +547,14 @@ def remove_character(name: str):
     refresh_added_characters()
     show_chat_display.refresh()
     show_character_locations.refresh()
+    show_character_clothing.refresh()
     update_next_speaker_label()
 
 def main_page():
     global user_input, you_name_input, character_dropdown, added_characters_container
     global next_speaker_label, next_button, settings_dropdown, session_dropdown, chat_display
     global current_location_label, llm_status_label
-    global ALL_CHARACTERS, ALL_SETTINGS, character_locations_display
+    global ALL_CHARACTERS, ALL_SETTINGS, character_locations_display, character_clothing_display
 
     logger.debug("Setting up main UI page.")
     ALL_CHARACTERS = get_available_characters(CHARACTERS_DIR)
@@ -567,7 +595,9 @@ def main_page():
                 ).classes('flex-grow text-gray-700')
 
             character_locations_display = ui.column().classes('mb-4')
+            character_clothing_display = ui.column().classes('mb-4')
             show_character_locations()
+            show_character_clothing()
 
             with ui.row().classes('w-full items-center mb-4'):
                 ui.label("Select Character:").classes('w-1/4')
