@@ -303,11 +303,13 @@ class ChatManager:
             c_loc = char_locs[c_name].strip()
             c_clothes = char_clothes.get(c_name, "").strip()
             if not c_loc and not c_clothes:
-                parts.append(f"{c_name}'s location and clothing are unknown")
+                logger.warning(f"Character '{c_name}' has no known location or clothing.")
             elif c_loc and not c_clothes:
-                parts.append(f"{c_name} is at {c_loc} (clothing status unknown)")
+                parts.append(f"{c_name}'s location: {c_loc}")
+                logger.warning(f"Character '{c_name}' has no known clothing.")
             elif not c_loc and c_clothes:
-                parts.append(f"{c_name} is wearing: {c_clothes}, location unknown")
+                parts.append(f"{c_name} is wearing: {c_clothes}")
+                logger.warning(f"Character '{c_name}' has no known location.")
             else:
                 parts.append(f"{c_name} is at {c_loc}, wearing: {c_clothes}")
         if not parts:

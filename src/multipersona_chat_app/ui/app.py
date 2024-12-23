@@ -1,5 +1,3 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/ui/app.py
-
 import os
 import uuid
 import asyncio
@@ -13,6 +11,7 @@ from models.interaction import Interaction
 from models.character import Character
 from chats.chat_manager import ChatManager
 from utils import load_settings, get_available_characters
+from templates import CharacterIntroductionOutput  # Import the new class
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +52,11 @@ def init_chat_manager(session_id: str, settings: List[Dict]):
         logger.error(f"Error initializing LLM Client: {e}")
 
     try:
-        introduction_llm_client = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml', output_model=None)
-        logger.info("Introduction LLM Client initialized successfully (unstructured).")
+        introduction_llm_client = OllamaClient(
+            'src/multipersona_chat_app/config/llm_config.yaml', 
+            output_model=CharacterIntroductionOutput  # Use the new model
+        )
+        logger.info("Introduction LLM Client initialized successfully (structured).")
     except Exception as e:
         logger.error(f"Error initializing Introduction LLM Client: {e}")
 
@@ -334,38 +336,76 @@ async def next_character_response():
 async def generate_character_introduction_message(character_name: str):
     global llm_busy
     llm_busy = True
+
+    # Update and show LLM status
     llm_status_label.text = f"Generating introduction for {character_name}..."
     llm_status_label.visible = True
     llm_status_label.update()
 
     try:
-        (system_prompt, introduction_prompt) = chat_manager.build_introduction_prompts_for_character(character_name)
+        logger.info(f"Building introduction prompts for character: {character_name}")
+        # Build prompts for generating introduction
+        system_prompt, introduction_prompt = chat_manager.build_introduction_prompts_for_character(character_name)
 
+        logger.debug(f"System prompt for {character_name}: {system_prompt}")
+        logger.debug(f"Introduction prompt for {character_name}: {introduction_prompt}")
+
+        # Generate introduction using the LLM
         introduction_response = await run.io_bound(
             introduction_llm_client.generate,
             prompt=introduction_prompt,
             system=system_prompt
         )
-        if isinstance(introduction_response, str) and introduction_response.strip():
-            formatted_message = introduction_response.strip()
+
+        if isinstance(introduction_response, CharacterIntroductionOutput):
+            intro_text = introduction_response.introduction_text.strip()
+            clothing = introduction_response.current_clothing.strip()
+            location = introduction_response.current_location.strip()
+
+            logger.info(f"Introduction generated for {character_name}. Text: {intro_text}")
+
+            # Store introduction text as a message
             chat_manager.add_message(
                 character_name,
-                formatted_message,
+                intro_text,
                 visible=True,
                 message_type="character",
             )
+
+            # Update clothing and location in the database if provided
+            if clothing:
+                logger.debug(f"Updating clothing for {character_name}: {clothing}")
+                chat_manager.db.update_character_clothing(
+                    chat_manager.session_id,
+                    character_name,
+                    clothing,
+                    triggered_by_message_id=None
+                )
+
+            if location:
+                logger.debug(f"Updating location for {character_name}: {location}")
+                chat_manager.db.update_character_location(
+                    chat_manager.session_id,
+                    character_name,
+                    location,
+                    triggered_by_message_id=None
+                )
+
             introductions_given[character_name] = True
-            logger.info(f"Introduction message generated for {character_name}.")
+            logger.info(f"Introduction for {character_name} stored successfully.")
         else:
-            logger.warning(f"Invalid or no response received for introduction of {character_name}. Not storing.")
+            logger.warning(f"Invalid response received for introduction of {character_name}. Response: {introduction_response}")
+
     except Exception as e:
-        logger.error(f"Error generating introduction for {character_name}: {e}")
+        logger.error(f"Error generating introduction for {character_name}: {e}", exc_info=True)
     finally:
+        # Reset LLM busy state and UI
         llm_busy = False
         llm_status_label.text = ""
         llm_status_label.visible = False
         llm_status_label.update()
 
+    # Refresh UI components
     show_chat_display.refresh()
     show_character_locations.refresh()
 

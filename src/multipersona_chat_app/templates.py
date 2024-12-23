@@ -4,7 +4,12 @@ class CharacterPromptGenOutput(BaseModel):
     character_system_prompt: str
     dynamic_prompt_template: str
 
-INTRODUCTION_TEMPLATE = r""" As {character_name}, introduce yourself in a detailed and immersive manner, focusing on what is visible to others:
+class CharacterIntroductionOutput(BaseModel):
+    introduction_text: str          # Free-form introduction text for the character
+    current_clothing: str           # Description of the character's current clothing
+    current_location: str           # Description of the character's current location
+
+INTRODUCTION_TEMPLATE = r"""As {character_name}, introduce yourself in a detailed and immersive manner, focusing on what is visible to others:
 
 Do not produce dialogue. You are alone unless context explicitly states otherwise. Focus on introducing {character_name} even when others are present and not on interactions or story progression.
 
@@ -15,6 +20,21 @@ Latest Dialogue: {latest_dialogue}
 
 ### Introduction Description ###
 Provide an elaborate description of your current state, including attire, physical stance, and subtle personality traits.
+
+### Structured Output ###
+Produce a JSON object with the following fields:
+
+```json
+{{
+  "introduction_text": "<Your detailed introduction here>",
+  "current_clothing": "<Description of your current clothing>",
+  "current_location": "<Description of your current location>"
+}}
+```
+
+- introduction_text: A free-form text providing an immersive elaborate introduction of the character. Be detailed here to give a good impression of the character.
+- current_clothing: A description of what the character is wearing.
+- current_location: A description of where the character is currently located. 
 """
 
 DEFAULT_PROMPT_TEMPLATE = r"""
