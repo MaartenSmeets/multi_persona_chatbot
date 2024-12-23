@@ -364,32 +364,22 @@ async def generate_character_introduction_message(character_name: str):
 
             logger.info(f"Introduction generated for {character_name}. Text: {intro_text}")
 
-            # Store introduction text as a message
-            chat_manager.add_message(
+            # Store introduction text as a message and capture the message_id
+            msg_id = chat_manager.add_message(
                 character_name,
                 intro_text,
                 visible=True,
                 message_type="character",
             )
 
-            # Update clothing and location in the database if provided
+            # Update clothing and location in the database if provided, linking them to the introduction message
             if clothing:
                 logger.debug(f"Updating clothing for {character_name}: {clothing}")
-                chat_manager.db.update_character_clothing(
-                    chat_manager.session_id,
-                    character_name,
-                    clothing,
-                    triggered_by_message_id=None
-                )
+                await chat_manager.handle_new_clothing_for_character(character_name, clothing, msg_id)
 
             if location:
                 logger.debug(f"Updating location for {character_name}: {location}")
-                chat_manager.db.update_character_location(
-                    chat_manager.session_id,
-                    character_name,
-                    location,
-                    triggered_by_message_id=None
-                )
+                await chat_manager.handle_new_location_for_character(character_name, location, msg_id)
 
             introductions_given[character_name] = True
             logger.info(f"Introduction for {character_name} stored successfully.")

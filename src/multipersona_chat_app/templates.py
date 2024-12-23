@@ -58,6 +58,7 @@ Determine how {character_name} will respond right now.
 }}
 ```
 
+- with new clothing and location changes, if any, specify not the change but the end state. Thus do not specify something like 'Keeps her current outfit but might adjust it slightly for comfort or effect as they move' but specify 'is dressed in a simple yet elegant white robe, open at the front to reveal a bright green swimsuit underneath. The sleeves are loose and flowing, and a colorful sash ties around her waist.'
 - If there is no location change, set "new_location" to an empty string.
 - If there is no clothing change, set "new_clothing" to an empty string.
 - All "why_*" fields must be filled with internal reasoning, never spoken aloud.

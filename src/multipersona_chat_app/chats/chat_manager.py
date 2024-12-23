@@ -1,5 +1,3 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/chats/chat_manager.py
-
 import os
 import logging
 from typing import List, Dict, Tuple, Optional
