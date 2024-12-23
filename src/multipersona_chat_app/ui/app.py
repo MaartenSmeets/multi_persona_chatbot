@@ -47,6 +47,21 @@ ALL_SETTINGS = []
 introductions_given = {}
 llm_busy = False
 
+# -----------------------------
+# A queue for user notifications
+# -----------------------------
+notification_queue = asyncio.Queue()
+
+def consume_notifications():
+    """
+    Synchronous function called by ui.timer.
+    It checks the queue and displays notifications in the current UI context.
+    """
+    while not notification_queue.empty():
+        # Use get_nowait() (instead of await queue.get()) since this function is synchronous.
+        message, msg_type = notification_queue.get_nowait()
+        ui.notify(message, type=msg_type)  # Safe in main UI context
+
 def init_chat_manager(session_id: str, settings: List[Dict]):
     global chat_manager, llm_client, introduction_llm_client
     logger.debug(f"Initializing ChatManager with session_id: {session_id}")
@@ -59,7 +74,7 @@ def init_chat_manager(session_id: str, settings: List[Dict]):
 
     try:
         introduction_llm_client = OllamaClient(
-            'src/multipersona_chat_app/config/llm_config.yaml', 
+            'src/multipersona_chat_app/config/llm_config.yaml',
             output_model=CharacterIntroductionOutput
         )
         logger.info("Introduction LLM Client initialized successfully (structured).")
@@ -282,8 +297,8 @@ async def select_setting(event):
             show_character_clothing.refresh()
         except Exception as pe:
             logger.error(f"Error while setting current setting: {pe}")
-            # Notify the user
-            await ui.notify(str(pe), type='error')
+            # Put the message into the notification queue
+            await notification_queue.put((str(pe), 'error'))
     else:
         logger.warning(f"Selected setting '{chosen_name}' not found.")
 
@@ -293,8 +308,7 @@ async def toggle_automatic_chat(e):
     if e.value:
         if not chat_manager.get_character_names():
             logger.warning("No characters added. Cannot start automatic chat.")
-            # Notify the user
-            await ui.notify("No characters added. Cannot start automatic chat.", type='warning')
+            await notification_queue.put(("No characters added. Cannot start automatic chat.", 'warning'))
             e.value = False
             return
         chat_manager.start_automatic_chat()
@@ -440,19 +454,22 @@ async def generate_character_message(character_name: str):
         prompts = chat_manager.db.get_character_prompts(chat_manager.session_id, character_name)
         if not prompts:
             logger.error(f"Failed to generate prompts for '{character_name}'. Aborting message generation.")
-            # Notify the user
-            await ui.notify(f"Failed to generate prompts for {character_name}.", type='error')
+            await notification_queue.put((f"Failed to generate prompts for {character_name}.", 'error'))
             llm_busy = False
             llm_status_label.text = ""
             llm_status_label.visible = False
             llm_status_label.update()
             return
 
-    char_spoken_before = any(m for m in chat_manager.db.get_messages(chat_manager.session_id) if m["sender"] == character_name and m["message_type"] == "character")
+    char_spoken_before = any(
+        m for m in chat_manager.db.get_messages(chat_manager.session_id)
+        if m["sender"] == character_name and m["message_type"] == "character"
+    )
 
     if character_name not in introductions_given:
         introductions_given[character_name] = False
 
+    # If the character hasn't introduced themselves yet, do that first
     if not introductions_given[character_name] and not char_spoken_before:
         await generate_character_introduction_message(character_name)
         return
@@ -544,8 +561,6 @@ async def add_character_from_dropdown(event):
             show_chat_display.refresh()
             show_character_locations.refresh()
             show_character_clothing.refresh()
-            # Automatically generate specific prompts for the added character
-            #await generate_character_specific_prompts(char_name)
         else:
             logger.warning(f"Character '{char_name}' is already added.")
     else:
@@ -577,13 +592,11 @@ async def generate_character_specific_prompts(char_name: str):
         logger.warning(f"Character '{char_name}' not found in chat_manager. Aborting generation.")
         return
 
-    # Check if prompts already exist
     existing_prompts = chat_manager.db.get_character_prompts(chat_manager.session_id, char_name)
     if existing_prompts:
         logger.info(f"Specific prompts for '{char_name}' already exist. Skipping generation.")
         return
 
-    # If there's a separate morality_guidelines.yaml, load the text:
     guidelines_path = os.path.join("src", "multipersona_chat_app", "config", "morality_guidelines.yaml")
     try:
         with open(guidelines_path, 'r') as f:
@@ -602,8 +615,6 @@ async def generate_character_specific_prompts(char_name: str):
         moral_guidelines=moral_guidelines
     )
 
-    # We'll use a separate OllamaClient call for prompt generation. 
-    # For structured output, pass output_model=CharacterPromptGenOutput
     prompt_generation_client = OllamaClient(
         'src/multipersona_chat_app/config/llm_config.yaml',
         output_model=CharacterPromptGenOutput
@@ -614,7 +625,6 @@ async def generate_character_specific_prompts(char_name: str):
     llm_status_label.visible = True
     llm_status_label.update()
 
-    # Acquire the lock before making an LLM request
     async with llm_lock:
         try:
             response: CharacterPromptGenOutput = await run.io_bound(
@@ -622,7 +632,6 @@ async def generate_character_specific_prompts(char_name: str):
                 prompt=prompt_for_llm
             )
             if response:
-                # Store these new prompts in the DB
                 chat_manager.db.save_character_prompts(
                     chat_manager.session_id,
                     char_name,
@@ -630,22 +639,24 @@ async def generate_character_specific_prompts(char_name: str):
                     response.dynamic_prompt_template
                 )
                 logger.info(f"Successfully stored system & dynamic prompts for character '{char_name}'.")
-                # Notify the user
-                await ui.notify(f"New prompts for {char_name} have been generated and stored.", type='positive')
+                # Put the success notification in the queue
+                await notification_queue.put((f"New prompts for {char_name} have been generated and stored.", 'positive'))
             else:
                 logger.warning(f"No response or invalid output from LLM for {char_name}.")
-                # Notify the user
-                await ui.notify(f"Failed to generate prompts for {char_name}.", type='warning')
+                await notification_queue.put((f"Failed to generate prompts for {char_name}.", 'warning'))
 
         except Exception as e:
             logger.error(f"Error while generating character-specific prompts for {char_name}: {e}")
-            # Notify the user
-            await ui.notify(f"Error: {e}", type='error')
+            await notification_queue.put((f"Error: {e}", 'error'))
         finally:
             llm_busy = False
             llm_status_label.text = ""
             llm_status_label.visible = False
             llm_status_label.update()
+
+    show_chat_display.refresh()
+    show_character_locations.refresh()
+    show_character_clothing.refresh()
 
 def main_page():
     global user_input, you_name_input, character_dropdown, added_characters_container
@@ -690,7 +701,6 @@ def main_page():
                     chat_manager.current_location if chat_manager.current_location else "Not set."
                 ).classes('flex-grow text-gray-700')
 
-            # Display all characters' location and clothing
             character_locations_display = ui.column().classes('mb-4')
             character_clothing_display = ui.column().classes('mb-4')
             show_character_locations()
@@ -738,7 +748,7 @@ def main_page():
                 global user_input
                 user_input = ui.input(placeholder='Enter your message...').classes('flex-grow')
                 ui.button('Send', on_click=lambda: asyncio.create_task(send_user_message())).classes('ml-2')
-
+                
     session_dropdown.on('change', on_session_select)
     session_dropdown.value = chat_manager.get_session_name()
     session_dropdown.update()
@@ -774,9 +784,21 @@ def start_ui():
         logger.info(f"Loading existing session: {first_session['name']} with ID: {first_session['session_id']}")
         load_session(first_session['session_id'])
 
+    # Timer for automatic conversation (Async)
     global auto_timer
     auto_timer = ui.timer(interval=2.0, callback=lambda: asyncio.create_task(automatic_conversation()), active=False)
     logger.info("UI timer for automatic conversation set up.")
 
+    # -----------------------------
+    # Timer to handle notifications
+    # -----------------------------
+    # Note: It's a *synchronous* function, so no async def here
+    ui.timer(1.0, consume_notifications, active=True)
+
     ui.run(reload=False)
     logger.info("UI is running.")
+
+
+# Entry point
+if __name__ == "__main__":
+    start_ui()
