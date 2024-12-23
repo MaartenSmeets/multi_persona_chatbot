@@ -545,7 +545,7 @@ async def add_character_from_dropdown(event):
             show_character_locations.refresh()
             show_character_clothing.refresh()
             # Automatically generate specific prompts for the added character
-            await generate_character_specific_prompts(char_name)
+            #await generate_character_specific_prompts(char_name)
         else:
             logger.warning(f"Character '{char_name}' is already added.")
     else:
