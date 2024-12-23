@@ -189,12 +189,20 @@ class ChatManager:
             setting_description = self.settings[self.current_setting]['description']
 
         location = self.get_combined_location()
+        current_outfit = self.db.get_character_clothing(self.session_id, character_name)
 
-        # Now do the final formatting
-        dynamic_prompt_template = dynamic_prompt_template.replace("{setting}", setting_description)
-        dynamic_prompt_template = dynamic_prompt_template.replace("{location}", location)
-        dynamic_prompt_template = dynamic_prompt_template.replace("{chat_history_summary}", chat_history_summary)
-        dynamic_prompt_template = dynamic_prompt_template.replace("{latest_dialogue}", latest_dialogue)
+        # Now do the final formatting using .format()
+        try:
+            dynamic_prompt_template = dynamic_prompt_template.format(
+                setting=setting_description,
+                chat_history_summary=chat_history_summary,
+                latest_dialogue=latest_dialogue,
+                current_location=location,
+                current_outfit=current_outfit
+            )
+        except KeyError as e:
+            logger.error(f"Missing placeholder in dynamic_prompt_template: {e}")
+            raise
 
         return (system_prompt, dynamic_prompt_template)
 
@@ -233,7 +241,8 @@ class ChatManager:
             setting=setting_description,
             location=session_loc,
             chat_history_summary=chat_history_summary,
-            latest_dialogue=latest_dialogue
+            latest_dialogue=latest_dialogue,
+            current_outfit=self.db.get_character_clothing(self.session_id, character_name)  # Added if needed
         )
         return system_prompt, user_prompt
 

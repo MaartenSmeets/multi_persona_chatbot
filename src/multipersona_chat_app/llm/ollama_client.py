@@ -111,6 +111,10 @@ class OllamaClient:
                             continue
                         logger.debug(f"Raw response line: {line}")
 
+                        # Skip lines that start with code fences
+                        if line.startswith("```"):
+                            continue
+
                         try:
                             data = json.loads(line)
                         except json.JSONDecodeError:

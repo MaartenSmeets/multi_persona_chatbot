@@ -64,7 +64,6 @@ Below are the rules that should guide {character_name}'s interactions. They shou
 
 The system prompt should include a sample JSON output template that guides the model on how to structure {character_name}'s responses. It is important the system prompt is very specific in this and mentions all fields in correct order and how to fill them!
 
-```json
 {{ 
   "purpose": "<short-term goal>",
   "why_purpose": "<reasoning>",
@@ -79,7 +78,6 @@ The system prompt should include a sample JSON output template that guides the m
   "new_clothing": "<complete description of entire changed outfit if changed, or leave empty if unchanged>",
   "why_new_clothing": "<reasoning for wearing this outfit, or explain continuity if unchanged>"
 }}
-```
 
 The model must be instructed clearly to always output valid JSON containing exactly these fields in the specified order.
 
@@ -117,13 +115,11 @@ Provide an elaborate description of your current state, including attire, physic
 ### Structured Output ###
 Produce a JSON object with the following fields:
 
-```json
 {{
   "introduction_text": "<Your detailed introduction here>",
   "current_clothing": "<Description of your current clothing>",
   "current_location": "<Description of your current location>"
 }}
-```
 
 - introduction_text: A free-form text providing an immersive elaborate introduction of the character. Be detailed here to give a good impression of the character.
 - current_clothing: A description of what the character is wearing.
