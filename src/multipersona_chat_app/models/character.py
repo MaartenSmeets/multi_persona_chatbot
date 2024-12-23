@@ -1,10 +1,11 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Optional
 import yaml
 
 class Character(BaseModel):
     name: str
-    system_prompt_template: str
-    prompt_template: str
+    character_system_prompt: Optional[str] = None
+    dynamic_prompt_template: Optional[str] = None
     appearance: str
     character_description: str
 
@@ -14,22 +15,22 @@ class Character(BaseModel):
         with open(yaml_file, 'r') as file:
             data = yaml.safe_load(file)
 
+        character_system_prompt = data.get('character_system_prompt')
+        dynamic_prompt_template = data.get('dynamic_prompt_template')
         appearance = data.get('appearance', "")
         character_description = data.get('character_description', "")
 
         return cls(
             name=data['name'],
-            system_prompt_template=data['system_prompt_template'],
-            prompt_template='',
+            character_system_prompt=character_system_prompt,
+            dynamic_prompt_template=dynamic_prompt_template,
             appearance=appearance,
             character_description=character_description
         )
 
     def format_prompt(self, setting: str, chat_history_summary: str, latest_dialogue: str, location: str) -> str:
-        """Format the prompt template with given variables, removing irrelevant headings if data is missing."""
+        """Format the dynamic_prompt_template with given variables, removing irrelevant headings if data is missing."""
 
-        # Helper to handle optional sections
-        # If data is present, show with heading. If not, mention its unavailability without a heading.
         def optional_section(title: str, content: str):
             content = content.strip()
             if content:
@@ -44,7 +45,7 @@ class Character(BaseModel):
         dialogue_section = optional_section("Latest Dialogue", latest_dialogue)
         current_outfit_section = optional_section("Current Outfit", self.appearance)
 
-        prompt = self.prompt_template.format(
+        prompt = self.dynamic_prompt_template.format(
             setting=setting_section.strip(),
             chat_history_summary=history_section.strip(),
             latest_dialogue=dialogue_section.strip(),

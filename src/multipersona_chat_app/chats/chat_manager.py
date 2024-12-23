@@ -175,7 +175,7 @@ class ChatManager:
         if not existing_prompts:
             raise ValueError(f"Existing prompts not found in the session.")
 
-        system_prompt = existing_prompts['system_prompt']
+        system_prompt = existing_prompts['character_system_prompt']
         dynamic_prompt_template = existing_prompts['dynamic_prompt_template']
 
         # 2) Fill in the dynamic placeholders in dynamic_prompt_template
@@ -383,4 +383,3 @@ Now produce a short summary from {character_name}'s viewpoint.
             logger.info(f"Character '{character_name}' updated clothing to '{new_clothing}'.")
         else:
             logger.debug(f"No clothing update needed for '{character_name}'.")
-

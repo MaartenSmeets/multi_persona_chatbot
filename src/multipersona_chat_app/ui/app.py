@@ -455,7 +455,7 @@ async def generate_character_message(character_name: str):
             llm_status_label.visible = False
             llm_status_label.update()
             return
-
+        
     char_spoken_before = any(
         m for m in chat_manager.db.get_messages(chat_manager.session_id)
         if m["sender"] == character_name and m["message_type"] == "character"
@@ -468,15 +468,14 @@ async def generate_character_message(character_name: str):
     if not introductions_given[character_name] and not char_spoken_before:
         await generate_character_introduction_message(character_name)
         return
-
-    system_prompt = prompts['system_prompt']
-    user_prompt = prompts['dynamic_prompt_template']
+    system_prompt = prompts['character_system_prompt']
+    dynamic_prompt_template = prompts['dynamic_prompt_template']
 
     try:
         # IMPORTANT: use_cache=False to force a fresh LLM response each time
         interaction = await run.io_bound(
             llm_client.generate,
-            prompt=user_prompt,
+            prompt=dynamic_prompt_template,
             system=system_prompt,
             use_cache=False  # Force new response to avoid repetitive loops
         )
@@ -555,6 +554,7 @@ async def add_character_from_dropdown(event):
             chat_manager.add_character(char_name, char)
             chat_manager.db.add_character_to_session(chat_manager.session_id, char_name)
             introductions_given[char_name] = False
+            await generate_character_specific_prompts(char_name)
             refresh_added_characters()
             logger.info(f"Character '{char_name}' added to chat.")
             show_chat_display.refresh()
@@ -587,11 +587,25 @@ async def generate_character_specific_prompts(char_name: str):
         logger.warning(f"Character '{char_name}' not found in chat_manager. Aborting generation.")
         return
 
-    existing_prompts = chat_manager.db.get_character_prompts(chat_manager.session_id, char_name)
-    if existing_prompts:
-        logger.info(f"Specific prompts for '{char_name}' already exist. Skipping generation.")
+    char = chat_manager.characters[char_name]
+    if char.character_system_prompt and char.dynamic_prompt_template:
+        # Save to database
+        chat_manager.db.save_character_prompts(
+            chat_manager.session_id,
+            char_name,
+            char.character_system_prompt,
+            char.dynamic_prompt_template
+        )
+        logger.info(f"Stored character_system_prompt and dynamic_prompt_template for '{char_name}' from YAML.")
+        await notification_queue.put((f"Prompts for {char_name} loaded from YAML and stored.", 'positive'))
         return
 
+    existing_prompts = chat_manager.db.get_character_prompts(chat_manager.session_id, char_name)
+    if existing_prompts:
+        logger.info(f"Specific prompts for '{char_name}' already exist in the database. Skipping generation.")
+        return
+
+    # Proceed to generate prompts via LLM
     guidelines_path = os.path.join("src", "multipersona_chat_app", "config", "morality_guidelines.yaml")
     try:
         with open(guidelines_path, 'r') as f:
@@ -633,7 +647,7 @@ async def generate_character_specific_prompts(char_name: str):
                     response.character_system_prompt,
                     response.dynamic_prompt_template
                 )
-                logger.info(f"Successfully stored system & dynamic prompts for character '{char_name}'.")
+                logger.info(f"Successfully stored character_system_prompt & dynamic_prompt_template for character '{char_name}'.")
                 await notification_queue.put((f"New prompts for {char_name} have been generated and stored.", 'positive'))
             else:
                 logger.warning(f"No response or invalid output from LLM for {char_name}.")
@@ -749,6 +763,14 @@ def main_page():
 
     logger.debug("Main UI page setup complete.")
 
+    # Timer for automatic conversation (Async)
+    global auto_timer
+    auto_timer = ui.timer(interval=2.0, callback=lambda: asyncio.create_task(automatic_conversation()), active=False)
+    logger.info("UI timer for automatic conversation set up.")
+
+    # Timer to handle notifications
+    ui.timer(1.0, consume_notifications, active=True)
+
 def start_ui():
     logger.info("Starting UI initialization.")
     default_session = str(uuid.uuid4())
@@ -761,7 +783,7 @@ def start_ui():
     if not sessions:
         logger.info("No existing sessions found. Creating default session.")
         chat_manager.db.create_session(default_session, f"Session {default_session}")
-        intimate_setting = next((s for s in settings if s['name'] == "Intimate Setting"), None)
+        intimate_setting = next((s for s in ALL_SETTINGS if s['name'] == "Intimate Setting"), None)
         if intimate_setting:
             chat_manager.set_current_setting(
                 intimate_setting['name'],

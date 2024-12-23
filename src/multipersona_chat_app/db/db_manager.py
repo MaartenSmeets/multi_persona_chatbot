@@ -141,13 +141,13 @@ class DBManager:
             )
         ''')
 
-        # Create character_prompts table WITHOUT user_prompt_template
+        # Create character_prompts table WITH character_system_prompt
         c.execute('''
             CREATE TABLE IF NOT EXISTS character_prompts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT NOT NULL,
                 character_name TEXT NOT NULL,
-                system_prompt TEXT NOT NULL,
+                character_system_prompt TEXT NOT NULL,
                 dynamic_prompt_template TEXT NOT NULL,
                 FOREIGN KEY(session_id) REFERENCES sessions(session_id),
                 UNIQUE(session_id, character_name)
@@ -156,7 +156,7 @@ class DBManager:
 
         conn.commit()
         conn.close()
-        logger.info("Database initialized with required tables (user_prompt_template removed).")
+        logger.info("Database initialized with required tables (character_system_prompt and dynamic_prompt_template added).")
 
     # Session Management
 
@@ -552,11 +552,11 @@ class DBManager:
 
     # Character Prompts
     def get_character_prompts(self, session_id: str, character_name: str) -> Optional[Dict[str, str]]:
-        """Fetches the stored system_prompt and dynamic_prompt_template for this character in this session."""
+        """Fetches the stored character_system_prompt and dynamic_prompt_template for this character in this session."""
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
-            SELECT system_prompt, dynamic_prompt_template
+            SELECT character_system_prompt, dynamic_prompt_template
             FROM character_prompts
             WHERE session_id = ? AND character_name = ?
         ''', (session_id, character_name))
@@ -564,22 +564,22 @@ class DBManager:
         conn.close()
         if row:
             return {
-                'system_prompt': row[0],
+                'character_system_prompt': row[0],
                 'dynamic_prompt_template': row[1]
             }
         return None
 
-    def save_character_prompts(self, session_id: str, character_name: str, system_prompt: str, dynamic_prompt_template: str):
+    def save_character_prompts(self, session_id: str, character_name: str, character_system_prompt: str, dynamic_prompt_template: str):
         """Inserts or replaces the character prompts for a given (session, character)."""
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
-            INSERT INTO character_prompts (session_id, character_name, system_prompt, dynamic_prompt_template)
+            INSERT INTO character_prompts (session_id, character_name, character_system_prompt, dynamic_prompt_template)
             VALUES (?, ?, ?, ?)
             ON CONFLICT(session_id, character_name)
-            DO UPDATE SET system_prompt=excluded.system_prompt,
+            DO UPDATE SET character_system_prompt=excluded.character_system_prompt,
                           dynamic_prompt_template=excluded.dynamic_prompt_template
-        ''', (session_id, character_name, system_prompt, dynamic_prompt_template))
+        ''', (session_id, character_name, character_system_prompt, dynamic_prompt_template))
         conn.commit()
         conn.close()
-        logger.info(f"Stored system_prompt and dynamic_prompt_template for character '{character_name}' in session '{session_id}'.")
+        logger.info(f"Stored character_system_prompt and dynamic_prompt_template for character '{character_name}' in session '{session_id}'.")
