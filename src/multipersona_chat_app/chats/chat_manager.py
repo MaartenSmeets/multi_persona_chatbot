@@ -12,6 +12,7 @@ from templates import (
     INTRODUCTION_TEMPLATE,
     DEFAULT_PROMPT_TEMPLATE,
     CHARACTER_SYSTEM_PROMPT_TEMPLATE,
+    CHARACTER_INTRODUCTION_SYSTEM_PROMPT_TEMPLATE,
 )
 from models.interaction import Interaction
 
@@ -243,36 +244,13 @@ class ChatManager:
         Return a (system_prompt, user_prompt) tuple for the introduction.
         If system prompt wasn't stored yet, we'll generate & store it here as well.
         """
-        existing_prompts = self.db.get_character_prompts(self.session_id, character_name)
-        if not existing_prompts:
-            char = self.characters[character_name]
-            # We'll assume some default tone
-            tone = "Relaxed and conversational"
+        char = self.characters[character_name]
 
-            system_prompt = CHARACTER_SYSTEM_PROMPT_TEMPLATE.format(
-                character_name=char.name,
-                character_description=char.character_description,
-                appearance=char.appearance,
-                character_tone=tone
-            )
-            user_prompt_template = DEFAULT_PROMPT_TEMPLATE.format(
-                character_name=char.name,
-                character_tone=tone,
-                setting="{setting}",
-                location="{location}",
-                chat_history_summary="{chat_history_summary}",
-                latest_dialogue="{latest_dialogue}"
-            )
-
-            self.db.save_character_prompts(
-                self.session_id,
-                character_name,
-                system_prompt,
-                user_prompt_template
-            )
-            existing_prompts = {'system_prompt': system_prompt, 'user_prompt_template': user_prompt_template}
-
-        system_prompt = existing_prompts['system_prompt']
+        system_prompt = CHARACTER_INTRODUCTION_SYSTEM_PROMPT_TEMPLATE.format(
+            character_name=char.name,
+            character_description=char.character_description,
+            appearance=char.appearance,
+        )
 
         # For introduction, we use INTRODUCTION_TEMPLATE as the "user" content
         visible_history = self.get_visible_history()

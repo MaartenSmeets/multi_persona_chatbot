@@ -3,29 +3,22 @@ from pydantic import BaseModel
 class CharacterPromptGenOutput(BaseModel):
     character_system_prompt: str
     dynamic_prompt_template: str
-    introduction_description: str  # New field for free-form introduction
-    introduction_variables: dict    # New field for specific variables
 
-INTRODUCTION_TEMPLATE = r"""As {character_name}, introduce yourself in a detailed and immersive manner, focusing on:
+INTRODUCTION_TEMPLATE = r""" As {character_name}, introduce yourself in a detailed and immersive manner, focusing on what is visible to others:
 
-immediate presence, attire, physical stance, personality subtleties. Do not produce dialogue. You are alone unless context explicitly states otherwise.
+Do not produce dialogue. You are alone unless context explicitly states otherwise. Focus on introducing {character_name} even when others are present and not on interactions or story progression.
 
 Context Setting: {setting} 
 Location: {location} 
 Most Recent Chat (Summarized): {chat_history_summary} 
-Latest Dialogue: {latest_dialogue}
+Latest Dialogue: {latest_dialogue} 
 
 ### Introduction Description ###
 Provide an elaborate description of your current state, including attire, physical stance, and subtle personality traits.
-
-### Introduction Variables ###
-- **start_location**: {location}
-- **start_clothing**: {current_outfit}
 """
 
 DEFAULT_PROMPT_TEMPLATE = r"""
-Below is the current scene context, including setting, location, current outfit, and recent dialogue. 
-Use this context to decide how {character_name} will respond right now. 
+Determine how {character_name} will respond right now. 
 **Always produce valid JSON** with *all* of these fields:
 
 ```json
@@ -48,6 +41,9 @@ Use this context to decide how {character_name} will respond right now.
 - If there is no location change, set "new_location" to an empty string.
 - If there is no clothing change, set "new_clothing" to an empty string.
 - All "why_*" fields must be filled with internal reasoning, never spoken aloud.
+
+- Make your purpose, affect, actions, and dialogue reflect your personal goals, habits, and style.
+- Provide actionable commentary in each "why_*" field to reveal the reason behind your choice (but never speak it aloud).
 """
 
 CHARACTER_PROMPT_GENERATION_TEMPLATE = r"""You are creating an elaborate character-specific system prompt and a dynamic character-specific user prompt template for a character with personal character details in both.
@@ -59,7 +55,7 @@ Description / Personality: {character_description}
 Appearance: {appearance}
 
 ### BEHAVIOR & GUIDELINES
-We also have moral guidelines: {integrated_rules}
+We also have moral guidelines: {moral_guidelines}
 
 ### WHAT TO PRODUCE
 We want exactly four JSON fields in your final answer: {{ "character_system_prompt": "...", "dynamic_prompt_template": "...", "introduction_description": "...", "introduction_variables": {{"start_location": "...", "start_clothing": "..."}} }}
@@ -87,13 +83,20 @@ It must instruct the LLM to respond using the final JSON schema (the same as in 
 Reference the integrated JSON rules from the snippet below:
 {default_prompt_specs}
 
-3) introduction_description
-Create a detailed, free-form introduction description for the character without enforcing a JSON structure.
+Your final answer must be valid JSON with exactly the 2 keys: "character_system_prompt" and "dynamic_prompt_template". Do not include any extra text outside the JSON object.
+"""
 
-4) introduction_variables
-Provide specific variables such as `start_location` and `start_clothing` based on the character's initial settings.
+CHARACTER_INTRODUCTION_SYSTEM_PROMPT_TEMPLATE = r"""
+You are {character_name}.
 
-Your final answer must be valid JSON with exactly the four keys: "character_system_prompt", "dynamic_prompt_template", "introduction_description", and "introduction_variables". Do not include any extra text outside the JSON object.
+## Character-Specific Information ##
+**Personality & Motivation**:
+{character_description}
+
+**Physical Appearance**:
+{appearance}
+
+Stay in character as {character_name}. Remain immersive.
 """
 
 CHARACTER_SYSTEM_PROMPT_TEMPLATE = r"""
@@ -125,23 +128,6 @@ You are {character_name}. Below are the unchanging rules and guidelines that def
 - Example 2: Dress or undress for specific real-life reasons (e.g., it's cold, you want to impress someone, etc.).
 - Example 3: Change location intentionally, explaining internally ("why_new_location") your real reason.
 
-## Additional Character-Specific Guidelines ##
-- Make your purpose, affect, actions, and dialogue reflect your personal goals, habits, and style.
-- Provide actionable commentary in each "why_*" field to reveal the reason behind your choice (but never speak it aloud).
-"""
-
-DEFAULT_PROMPT_TEMPLATE = r"""
-Below is the current scene context, including setting, location, and recent dialogue. Use this context
-to decide how {character_name} will respond right now.
-
-{setting}
-
-{location}
-
-{chat_history_summary}
-
-{latest_dialogue}
-
 Stay in character as {character_name}. Remain immersive. Rely on your system prompt rules for unchanging guidance, but incorporate these dynamic details. Output JSON with "why_*" fields.
 
 ```json
@@ -162,10 +148,16 @@ Stay in character as {character_name}. Remain immersive. Rely on your system pro
 ```
 """
 
-INTRODUCTION_TEMPLATE = r""" As {character_name}, introduce yourself in a detailed and immersive manner, focusing on:
+DEFAULT_PROMPT_TEMPLATE = r"""
+Below is the current scene context, including setting, location, and recent dialogue. Use this context
+to decide how {character_name} will respond right now.
 
-immediate presence attire physical stance personality subtleties Do not produce dialogue. You are alone unless context explicitly states otherwise.
+{setting}
 
-Context Setting: {setting} Location: {location} Most Recent Chat (Summarized): {chat_history_summary} Latest Dialogue: {latest_dialogue} 
+{location}
+
+{chat_history_summary}
+
+{latest_dialogue}
+
 """
-
