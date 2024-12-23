@@ -8,9 +8,7 @@ from datetime import datetime
 import yaml
 from templates import (
     INTRODUCTION_TEMPLATE,
-    DEFAULT_PROMPT_TEMPLATE,
-    CHARACTER_SYSTEM_PROMPT_TEMPLATE,
-    CHARACTER_INTRODUCTION_SYSTEM_PROMPT_TEMPLATE,
+    CHARACTER_INTRODUCTION_SYSTEM_PROMPT_TEMPLATE
 )
 from models.interaction import Interaction
 

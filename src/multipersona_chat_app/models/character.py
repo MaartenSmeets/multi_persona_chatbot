@@ -1,7 +1,5 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/models/character.py
 from pydantic import BaseModel
 import yaml
-from templates import DEFAULT_PROMPT_TEMPLATE
 
 class Character(BaseModel):
     name: str
@@ -16,22 +14,18 @@ class Character(BaseModel):
         with open(yaml_file, 'r') as file:
             data = yaml.safe_load(file)
 
-        # If no custom prompt_template is provided, use the default
-        if 'prompt_template' not in data or not data['prompt_template']:
-            data['prompt_template'] = DEFAULT_PROMPT_TEMPLATE
-
         appearance = data.get('appearance', "")
         character_description = data.get('character_description', "")
 
         return cls(
             name=data['name'],
             system_prompt_template=data['system_prompt_template'],
-            prompt_template=data['prompt_template'],
+            prompt_template='',
             appearance=appearance,
             character_description=character_description
         )
 
-    def format_prompt(self, setting: str, chat_history_summary: str, latest_dialogue: str, name: str, location: str) -> str:
+    def format_prompt(self, setting: str, chat_history_summary: str, latest_dialogue: str, location: str) -> str:
         """Format the prompt template with given variables, removing irrelevant headings if data is missing."""
 
         # Helper to handle optional sections
@@ -45,23 +39,17 @@ class Character(BaseModel):
 
         # Format each section
         setting_section = optional_section("Setting", setting)
-        location_section = optional_section("Current Location", location)
+        current_location_section = optional_section("Current Location", location)
         history_section = optional_section("Chat History Summary", chat_history_summary)
         dialogue_section = optional_section("Latest Dialogue", latest_dialogue)
+        current_outfit_section = optional_section("Current Outfit", self.appearance)
 
-        # If no data is available for a section, we get a line stating that it's not available.
-        # This ensures clarity that the information is simply not present at this time.
-
-        # Insert the formatted sections into the prompt template
-        # We replace the placeholders in the template with the processed strings.
-        # The template originally expected headings, but we now provide the processed strings directly.
-        # We rely on our optional_section function to handle whether to display headings or not.
         prompt = self.prompt_template.format(
             setting=setting_section.strip(),
             chat_history_summary=history_section.strip(),
             latest_dialogue=dialogue_section.strip(),
-            name=name,
-            location=location_section.strip()
+            current_location=current_location_section.strip(),
+            current_outfit=current_outfit_section.strip()
         )
 
         return prompt
