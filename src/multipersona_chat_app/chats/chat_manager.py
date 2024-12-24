@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 
 class ChatManager:
     def __init__(self, you_name: str = "You", session_id: Optional[str] = None, settings: List[Dict] = []):
-
         self.characters: Dict[str, Character] = {}
         self.turn_index = 0
         self.automatic_running = False
@@ -180,7 +179,15 @@ class ChatManager:
 
         # Get the required values directly
         visible_history = self.get_visible_history()
-        latest_dialogue = visible_history[-1][1] if visible_history else ""
+
+        # FIX: include speaker name in latest dialogue
+        if visible_history:
+            last_speaker = visible_history[-1][0]
+            last_message_text = visible_history[-1][1]
+            latest_dialogue = f"{last_speaker}: {last_message_text}"
+        else:
+            latest_dialogue = ""
+
         all_summaries = self.db.get_all_summaries(self.session_id, character_name)
         chat_history_summary = "\n\n".join(all_summaries) if all_summaries else ""
 
