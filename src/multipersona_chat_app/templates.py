@@ -6,7 +6,7 @@ class CharacterPromptGenOutput(BaseModel):
 
 class CharacterIntroductionOutput(BaseModel):
     introduction_text: str          # Free-form introduction text for the character
-    current_clothing: str           # Description of the character's current clothing
+    current_appearance: str         # Description of the character's current appearance
     current_location: str           # Description of the character's current location
 
 CHARACTER_PROMPT_GENERATION_TEMPLATE = r"""You are creating an elaborate character-specific system prompt with {character_name} specific rules/guidelines and a dynamic character-specific user prompt template for dynamic context. Both should be specifically tailored to {character_name}.
@@ -48,17 +48,17 @@ Below are the rules that should guide {character_name}'s interactions. They shou
 
 - Ensure {character_name} consistently embodies a distinct and coherent personality, clearly defined goals, and motivations tailored to every situation, shaping how {character_name} interacts and responds.
 - Craft {character_name}'s responses to reveal emotional states and align them with personal objectives. Use nuanced emotional expressions and logical explanations in internal reasoning fields (e.g., "why_purpose", "why_affect") to provide depth and authenticity.
-- When describing {character_name}'s attire and location choices, always provide complete descriptions rather than just changes. For attire, detail the full outfit including all clothing items, accessories, and styling. For locations, provide comprehensive descriptions including the type of place, its characteristics, ambiance, and relevant details. All choices must reflect practicality, personality, and current context, with thorough explanations in "why_new_location" and "why_new_clothing".
+- When describing {character_name}'s appearance and location choices, always provide complete descriptions rather than just changes. For appearance, detail the full appearance including all clothing items, accessories, and styling. For locations, provide comprehensive descriptions including the type of place, its characteristics, ambiance, and relevant details. All choices must reflect practicality, personality, and current context, with thorough explanations in "why_new_location" and "why_new_appearance".
 - Provide comprehensive internal reasoning for all decisions and actions, ensuring that insights into {character_name}'s thought process (via "why_..." fields) remain internal and do not appear as spoken dialogue.
 - Keep {character_name}'s interactions fresh, relevant, and contextually appropriate by avoiding repetitive behavior or dialogue. Maintain alignment with {character_name}'s unique personality and evolving experiences.
-- Situate {character_name} in a realistic world with logical progressions and developments. Any changes to behavior, attire, or setting must reflect this real-world foundation and {character_name}'s immediate goals or psychological state.
+- Situate {character_name} in a realistic world with logical progressions and developments. Any changes to behavior, appearance, or setting must reflect this real-world foundation and {character_name}'s immediate goals or psychological state.
 - Allow {character_name}'s personality, emotional reactions, and decisions to evolve naturally in response to new challenges and environments. Ensure these developments remain consistent with their goals and psychological profile.
 - Demonstrate genuine and varied emotions in response to different events, showing both strengths and vulnerabilities, while reflecting {character_name}'s coping mechanisms and emotional tendencies.
 - Match {character_name}'s tone, vocabulary, and conversational style to their personality, education, background, and context. Let these elements adapt naturally depending on who {character_name} is interacting with or what situation they face.
-- Highlight individuality in every aspect of {character_name}'s behavior—tone, word choice, clothing, emotional reactions, and interactions with strangers or conflicts. Ensure {character_name}'s actions align deeply with personal goals, ethical stances, coping strategies, and attachment style.
+- Highlight individuality in every aspect of {character_name}'s behavior—tone, word choice, appearance, emotional reactions, and interactions with strangers or conflicts. Ensure {character_name}'s actions align deeply with personal goals, ethical stances, coping strategies, and attachment style.
 - Use {character_name}'s inner fears, strengths, and decision-making preferences to drive responses to stress, conflict, and uncertainty. Choices should feel deliberate or impulsive, analytical or intuitive, based on {character_name}'s psychological makeup.
 - Reflect {character_name}'s adaptability to context, showing how emotional state, environmental perception, and interpersonal dynamics influence behavior and decisions while maintaining logical coherence and personality consistency.
-- When there is no change to the location or attire, the new_location and new_clothing fields may be left empty, but a reasoning field (e.g., why_new_location or why_new_clothing) must explain the continuity.
+- When there is no change to the location or appearance, the new_location and new_appearance fields may be left empty, but a reasoning field (e.g., why_new_location or why_new_appearance) must explain the continuity.
 
 #### Sample JSON Output
 
@@ -75,8 +75,8 @@ The system prompt should include a sample JSON output template that guides the m
   "why_dialogue": "<reasoning>",
   "new_location": "<complete description of the entire current location if changed, or leave empty if unchanged>",
   "why_new_location": "<reasoning for being in this location, or explain continuity if unchanged>",
-  "new_clothing": "<complete description of entire changed outfit if changed, or leave empty if unchanged>",
-  "why_new_clothing": "<reasoning for wearing this outfit, or explain continuity if unchanged>"
+  "new_appearance": "<complete description of entire changed appearance if changed, or leave empty if unchanged>",
+  "why_new_appearance": "<reasoning for this appearance, or explain continuity if unchanged>"
 }}
 
 The model must be instructed clearly to always output valid JSON containing exactly these fields in the specified order.
@@ -91,7 +91,7 @@ Create a reusable user prompt template that has placeholders for these context p
 
 {{latest_dialogue}}
 
-{{current_outfit}}
+{{current_appearance}}
 
 {{current_location}}
 
@@ -110,19 +110,19 @@ Most Recent Chat (Summarized): {chat_history_summary}
 Latest Dialogue: {latest_dialogue} 
 
 ### Introduction Description ###
-Provide an elaborate description of your current state, including attire, physical stance, and subtle personality traits.
+Provide an elaborate description of your current state, including appearance, physical stance, and subtle personality traits.
 
 ### Structured Output ###
 Produce a JSON object with the following fields:
 
 {{
   "introduction_text": "<Your detailed introduction here>",
-  "current_clothing": "<Description of your current clothing>",
+  "current_appearance": "<Description of your current appearance>",
   "current_location": "<Description of your current location>"
 }}
 
 - introduction_text: A free-form text providing an immersive elaborate introduction of the character. Be detailed here to give a good impression of the character.
-- current_clothing: A description of what the character is wearing.
+- current_appearance: A description of the character's current appearance.
 - current_location: A description of where the character is currently located. 
 """
 

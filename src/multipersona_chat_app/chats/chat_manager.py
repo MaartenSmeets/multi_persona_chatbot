@@ -110,7 +110,7 @@ class ChatManager:
     def add_character(self, char_name: str, char_instance: Character):
         self.characters[char_name] = char_instance
         current_session_loc = self.db.get_current_location(self.session_id) or ""
-        self.db.add_character_to_session(self.session_id, char_name, initial_location=current_session_loc, initial_clothing=char_instance.appearance)
+        self.db.add_character_to_session(self.session_id, char_name, initial_location=current_session_loc, initial_appearance=char_instance.appearance)
 
     def remove_character(self, char_name: str):
         if char_name in self.characters:
@@ -140,9 +140,9 @@ class ChatManager:
                     why_action: Optional[str] = None,
                     why_dialogue: Optional[str] = None,
                     why_new_location: Optional[str] = None,
-                    why_new_clothing: Optional[str] = None,
+                    why_new_appearance: Optional[str] = None,
                     new_location: Optional[str] = None,
-                    new_clothing: Optional[str] = None) -> Optional[int]:
+                    new_appearance: Optional[str] = None) -> Optional[int]:
         if message_type == "system" or message.strip() == "...":
             return None
         message_id = self.db.save_message(
@@ -158,9 +158,9 @@ class ChatManager:
             why_action,
             why_dialogue,
             why_new_location,
-            why_new_clothing,
+            why_new_appearance,
             new_location,
-            new_clothing
+            new_appearance
         )
         self.check_summarization()
         return message_id
@@ -213,7 +213,7 @@ class ChatManager:
             setting_description = self.settings[self.current_setting]['description']
 
         location = self.get_combined_location()
-        current_outfit = self.db.get_character_clothing(self.session_id, character_name)
+        current_appearance = self.db.get_character_appearance(self.session_id, character_name)
 
         # Replace placeholders one by one using replace()
         try:
@@ -222,7 +222,7 @@ class ChatManager:
             formatted_prompt = formatted_prompt.replace("{chat_history_summary}", chat_history_summary)
             formatted_prompt = formatted_prompt.replace("{latest_dialogue}", latest_dialogue)
             formatted_prompt = formatted_prompt.replace("{current_location}", location)
-            formatted_prompt = formatted_prompt.replace("{current_outfit}", current_outfit)
+            formatted_prompt = formatted_prompt.replace("{current_appearance}", current_appearance)
         except Exception as e:
             logger.error(f"Error replacing placeholders in dynamic_prompt_template: {e}")
             raise
@@ -267,13 +267,13 @@ class ChatManager:
             location=session_loc,
             chat_history_summary=chat_history_summary,
             latest_dialogue=latest_dialogue,
-            current_outfit=self.db.get_character_clothing(self.session_id, character_name)  # Added if needed
+            current_appearance=self.db.get_character_appearance(self.session_id, character_name)
         )
         return system_prompt, user_prompt
 
     def get_combined_location(self) -> str:
         char_locs = self.db.get_all_character_locations(self.session_id)
-        char_clothes = self.db.get_all_character_clothing(self.session_id)
+        char_apps = self.db.get_all_character_appearances(self.session_id)
         msgs = self.db.get_messages(self.session_id)
         participants = set(
             m["sender"] for m in msgs 
@@ -294,17 +294,17 @@ class ChatManager:
             if c_name not in participants:
                 continue
             c_loc = char_locs[c_name].strip()
-            c_clothes = char_clothes.get(c_name, "").strip()
-            if not c_loc and not c_clothes:
-                logger.warning(f"Character '{c_name}' has no known location or clothing.")
-            elif c_loc and not c_clothes:
+            c_app = char_apps.get(c_name, "").strip()
+            if not c_loc and not c_app:
+                logger.warning(f"Character '{c_name}' has no known location or appearance.")
+            elif c_loc and not c_app:
                 parts.append(f"{c_name}'s location: {c_loc}")
-                logger.warning(f"Character '{c_name}' has no known clothing.")
-            elif not c_loc and c_clothes:
-                parts.append(f"{c_name} is wearing: {c_clothes}")
+                logger.warning(f"Character '{c_name}' has no known appearance.")
+            elif not c_loc and c_app:
+                parts.append(f"{c_name} has appearance: {c_app}")
                 logger.warning(f"Character '{c_name}' has no known location.")
             else:
-                parts.append(f"{c_name}'s location: {c_loc}, wearing: {c_clothes}")
+                parts.append(f"{c_name}'s location: {c_loc}, appearance: {c_app}")
         if not parts:
             session_loc = self.db.get_current_location(self.session_id)
             if not session_loc and self.current_setting in self.settings:
@@ -347,6 +347,7 @@ class ChatManager:
 
         history_lines = []
         for (mid, sender, message, affect, purpose) in to_summarize:
+            # Focus on newly revealed or changed details (feelings, location, appearance...)
             if sender == character_name:
                 line = f"{sender} (Affect: {affect}, Purpose: {purpose}): {message}"
             else:
@@ -356,7 +357,7 @@ class ChatManager:
         history_text = "\n".join(history_lines)
 
         prompt = f"""You are summarizing the conversation **from {character_name}'s perspective**. 
-Focus on newly revealed or changed details (feelings, location, clothing, important topic shifts, interpersonal dynamics).
+Focus on newly revealed or changed details (feelings, location, appearance, important topic shifts, interpersonal dynamics).
 Do **not** restate the entire environment or old details. Keep it concise and relevant to what {character_name} newly learns or experiences.
 
 Recent events to summarize:
@@ -420,17 +421,17 @@ Now produce a short summary from {character_name}'s viewpoint.
         else:
             logger.debug(f"No location update needed for '{character_name}'.")
 
-    async def handle_new_clothing_for_character(self, character_name: str, new_clothing: str, triggered_message_id: int):
-        updated = self.db.update_character_clothing(
+    async def handle_new_appearance_for_character(self, character_name: str, new_appearance: str, triggered_message_id: int):
+        updated = self.db.update_character_appearance(
             self.session_id,
             character_name,
-            new_clothing,
+            new_appearance,
             triggered_by_message_id=triggered_message_id
         )
         if updated:
-            logger.info(f"Character '{character_name}' updated clothing to '{new_clothing}'.")
+            logger.info(f"Character '{character_name}' updated appearance to '{new_appearance}'.")
         else:
-            logger.debug(f"No clothing update needed for '{character_name}'.")
+            logger.debug(f"No appearance update needed for '{character_name}'.")
 
     def get_all_visible_messages(self) -> List[Dict]:
         """

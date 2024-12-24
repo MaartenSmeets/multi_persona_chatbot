@@ -11,8 +11,8 @@ class Interaction(BaseModel):
     why_dialogue: str   # Why these words (or silence) were chosen
     new_location: str   # This character's personal location change (if any)
     why_new_location: str
-    new_clothing: str   # New or removed clothing if any
-    why_new_clothing: str
+    new_appearance: str   # New or changed appearance if any
+    why_new_appearance: str
 
     def format(self) -> str:
         """Format the Interaction object into a human-readable string for debugging/logging."""
@@ -27,6 +27,6 @@ class Interaction(BaseModel):
             f"Why Dialogue: {self.why_dialogue}\n"
             f"New Location: {self.new_location if self.new_location else 'None'}\n"
             f"Why New Location: {self.why_new_location if self.why_new_location else 'None'}\n"
-            f"New Clothing: {self.new_clothing if self.new_clothing else 'None'}\n"
-            f"Why New Clothing: {self.why_new_clothing if self.why_new_clothing else 'None'}\n"
+            f"New Appearance: {self.new_appearance if self.new_appearance else 'None'}\n"
+            f"Why New Appearance: {self.why_new_appearance if self.why_new_appearance else 'None'}\n"
         )

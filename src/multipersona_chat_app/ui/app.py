@@ -117,11 +117,11 @@ def show_character_details():
                             ui.label(f"Location: {loc if loc.strip() else '(Unknown location)'}"
                                    ).classes('text-sm text-gray-700')
                         
-                        # Clothing information
-                        clothing = chat_manager.db.get_character_clothing(chat_manager.session_id, c_name)
+                        # Appearance information
+                        appearance = chat_manager.db.get_character_appearance(chat_manager.session_id, c_name)
                         with ui.row():
                             ui.icon('checkroom').classes('text-gray-600 mr-2')
-                            ui.label(f"Outfit: {clothing if clothing.strip() else '(Unknown clothing)'}"
+                            ui.label(f"Appearance: {appearance if appearance.strip() else '(Unknown appearance)'}"
                                    ).classes('text-sm text-gray-700')
     else:
         logger.error("character_details_display is not initialized.")
@@ -400,7 +400,7 @@ async def generate_character_introduction_message(character_name: str):
 
         if isinstance(introduction_response, CharacterIntroductionOutput):
             intro_text = introduction_response.introduction_text.strip()
-            clothing = introduction_response.current_clothing.strip()
+            appearance = introduction_response.current_appearance.strip()
             location = introduction_response.current_location.strip()
 
             logger.info(f"Introduction generated for {character_name}. Text: {intro_text}")
@@ -412,8 +412,8 @@ async def generate_character_introduction_message(character_name: str):
                 message_type="character",
             )
 
-            if clothing:
-                await chat_manager.handle_new_clothing_for_character(character_name, clothing, msg_id)
+            if appearance:
+                await chat_manager.handle_new_appearance_for_character(character_name, appearance, msg_id)
 
             if location:
                 await chat_manager.handle_new_location_for_character(character_name, location, msg_id)
@@ -471,7 +471,6 @@ async def generate_character_message(character_name: str):
         await generate_character_introduction_message(character_name)
         return
 
-    # **Updated Section Starts Here**
     try:
         # Call build_prompt_for_character to get the formatted prompt
         system_prompt, formatted_prompt = chat_manager.build_prompt_for_character(character_name)
@@ -503,14 +502,14 @@ async def generate_character_message(character_name: str):
                     why_action=interaction.why_action,
                     why_dialogue=interaction.why_dialogue,
                     why_new_location=interaction.why_new_location,
-                    why_new_clothing=interaction.why_new_clothing,
+                    why_new_appearance=interaction.why_new_appearance,
                     new_location=interaction.new_location.strip() if interaction.new_location.strip() else None,
-                    new_clothing=interaction.new_clothing.strip() if interaction.new_clothing.strip() else None
+                    new_appearance=interaction.new_appearance.strip() if interaction.new_appearance.strip() else None
                 )
                 if interaction.new_location.strip():
                     await chat_manager.handle_new_location_for_character(character_name, interaction.new_location, msg_id)
-                if interaction.new_clothing.strip():
-                    await chat_manager.handle_new_clothing_for_character(character_name, interaction.new_clothing, msg_id)
+                if interaction.new_appearance.strip():
+                    await chat_manager.handle_new_appearance_for_character(character_name, interaction.new_appearance, msg_id)
                 logger.debug(f"Message generated for {character_name}: {interaction.dialogue}")
         else:
             logger.warning(f"No valid interaction or no response for {character_name}. Not storing.")

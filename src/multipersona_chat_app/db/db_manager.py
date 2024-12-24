@@ -12,13 +12,13 @@ def merge_location_update(old_location: str, new_location: str) -> str:
         return old_location
     return new_location
 
-def merge_clothing_update(old_clothing: str, new_clothing: str) -> str:
+def merge_appearance_update(old_appearance: str, new_appearance: str) -> str:
     """
-    If new_clothing is empty, keep old. If not empty, replace with new.
+    If new_appearance is empty, keep old. If not empty, replace with new.
     """
-    if not new_clothing.strip():
-        return old_clothing
-    return new_clothing
+    if not new_appearance.strip():
+        return old_appearance
+    return new_appearance
 
 class DBManager:
     def __init__(self, db_path: str):
@@ -42,7 +42,7 @@ class DBManager:
             )
         ''')
 
-        # Create messages table (with columns for all "why_*" plus new_location/new_clothing)
+        # Create messages table (with columns for all "why_*" plus new_location/new_appearance)
         c.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,10 +60,10 @@ class DBManager:
                 why_action TEXT,
                 why_dialogue TEXT,
                 why_new_location TEXT,
-                why_new_clothing TEXT,
+                why_new_appearance TEXT,
 
                 new_location TEXT,
-                new_clothing TEXT,
+                new_appearance TEXT,
 
                 FOREIGN KEY(session_id) REFERENCES sessions(session_id)
             )
@@ -76,9 +76,9 @@ class DBManager:
             ("why_action", "TEXT"),
             ("why_dialogue", "TEXT"),
             ("why_new_location", "TEXT"),
-            ("why_new_clothing", "TEXT"),
+            ("why_new_appearance", "TEXT"),
             ("new_location", "TEXT"),
-            ("new_clothing", "TEXT"),
+            ("new_appearance", "TEXT"),
         ]
         for col, ctype in columns_to_add:
             try:
@@ -112,30 +112,30 @@ class DBManager:
             )
         ''')
 
-        # Create or alter session_characters table to include current_location and current_clothing
+        # Create or alter session_characters table to include current_appearance
         c.execute('''
             CREATE TABLE IF NOT EXISTS session_characters (
                 session_id TEXT NOT NULL,
                 character_name TEXT NOT NULL,
                 current_location TEXT,
-                current_clothing TEXT,
+                current_appearance TEXT,
                 FOREIGN KEY(session_id) REFERENCES sessions(session_id),
                 PRIMARY KEY (session_id, character_name)
             )
         ''')
         try:
-            c.execute("ALTER TABLE session_characters ADD COLUMN current_clothing TEXT")
-            logger.info("Added column 'current_clothing' to 'session_characters' table.")
+            c.execute("ALTER TABLE session_characters ADD COLUMN current_appearance TEXT")
+            logger.info("Added column 'current_appearance' to 'session_characters' table.")
         except sqlite3.OperationalError:
-            logger.debug("Column 'current_clothing' already exists in 'session_characters' table. Skipping.")
+            logger.debug("Column 'current_appearance' already exists in 'session_characters' table. Skipping.")
 
-        # Create clothing_history table for storing chronological clothing changes
+        # Create appearance_history table for storing chronological appearance changes
         c.execute('''
-            CREATE TABLE IF NOT EXISTS clothing_history (
+            CREATE TABLE IF NOT EXISTS appearance_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT NOT NULL,
                 character_name TEXT NOT NULL,
-                clothing TEXT NOT NULL,
+                appearance TEXT NOT NULL,
                 changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 triggered_by_message_id INTEGER,
                 FOREIGN KEY(session_id) REFERENCES sessions(session_id),
@@ -182,7 +182,7 @@ class DBManager:
         c.execute('DELETE FROM location_history WHERE session_id = ?', (session_id,))
         c.execute('DELETE FROM session_characters WHERE session_id = ?', (session_id,))
         c.execute('DELETE FROM character_prompts WHERE session_id = ?', (session_id,))
-        c.execute('DELETE FROM clothing_history WHERE session_id = ?', (session_id,))
+        c.execute('DELETE FROM appearance_history WHERE session_id = ?', (session_id,))
         conn.commit()
         conn.close()
         logger.info(f"Session with ID '{session_id}' and all associated data deleted.")
@@ -263,18 +263,18 @@ class DBManager:
         logger.debug(f"Retrieved {len(history)} location history entries for session '{session_id}'.")
         return history
 
-    # Character location & clothing management
-    def add_character_to_session(self, session_id: str, character_name: str, initial_location: str = "", initial_clothing: str = ""):
+    # Character location & appearance management
+    def add_character_to_session(self, session_id: str, character_name: str, initial_location: str = "", initial_appearance: str = ""):
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
-            INSERT OR IGNORE INTO session_characters (session_id, character_name, current_location, current_clothing)
+            INSERT OR IGNORE INTO session_characters (session_id, character_name, current_location, current_appearance)
             VALUES (?, ?, ?, ?)
-        ''', (session_id, character_name, initial_location, initial_clothing))
+        ''', (session_id, character_name, initial_location, initial_appearance))
         conn.commit()
         conn.close()
         logger.debug(
-            f"Added character '{character_name}' to session '{session_id}' with initial location: '{initial_location}', clothing: '{initial_clothing}'."
+            f"Added character '{character_name}' to session '{session_id}' with initial location: '{initial_location}', appearance: '{initial_appearance}'."
         )
 
     def remove_character_from_session(self, session_id: str, character_name: str):
@@ -309,11 +309,11 @@ class DBManager:
             return row[0]
         return ""
 
-    def get_character_clothing(self, session_id: str, character_name: str) -> str:
+    def get_character_appearance(self, session_id: str, character_name: str) -> str:
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
-            SELECT current_clothing
+            SELECT current_appearance
             FROM session_characters
             WHERE session_id = ? AND character_name = ?
         ''', (session_id, character_name))
@@ -335,11 +335,11 @@ class DBManager:
         conn.close()
         return {row[0]: (row[1] if row[1] else "") for row in rows}
 
-    def get_all_character_clothing(self, session_id: str) -> Dict[str, str]:
+    def get_all_character_appearances(self, session_id: str) -> Dict[str, str]:
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
-            SELECT character_name, current_clothing
+            SELECT character_name, current_appearance
             FROM session_characters
             WHERE session_id = ?
         ''', (session_id,))
@@ -380,37 +380,37 @@ class DBManager:
 
         return True  # Update occurred
 
-    def update_character_clothing(self, session_id: str, character_name: str, new_clothing: str, triggered_by_message_id: Optional[int] = None) -> bool:
-        old_clothing = self.get_character_clothing(session_id, character_name)
-        updated_clothing = merge_clothing_update(old_clothing, new_clothing)
+    def update_character_appearance(self, session_id: str, character_name: str, new_appearance: str, triggered_by_message_id: Optional[int] = None) -> bool:
+        old_appearance = self.get_character_appearance(session_id, character_name)
+        updated_appearance = merge_appearance_update(old_appearance, new_appearance)
 
-        if updated_clothing == old_clothing:
-            logger.debug(f"No clothing change for character '{character_name}' in session '{session_id}'. Skipping update.")
+        if updated_appearance == old_appearance:
+            logger.debug(f"No appearance change for character '{character_name}' in session '{session_id}'. Skipping update.")
             return False  # No update needed
 
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
             UPDATE session_characters
-            SET current_clothing = ?
+            SET current_appearance = ?
             WHERE session_id = ? AND character_name = ?
-        ''', (updated_clothing, session_id, character_name))
+        ''', (updated_appearance, session_id, character_name))
         conn.commit()
         conn.close()
 
         logger.info(
-            f"Updated clothing of character '{character_name}' in session '{session_id}' "
-            f"from '{old_clothing}' to '{updated_clothing}'."
+            f"Updated appearance of character '{character_name}' in session '{session_id}' "
+            f"from '{old_appearance}' to '{updated_appearance}'."
         )
 
         if triggered_by_message_id:
-            # Also record in clothing_history
+            # Also record in appearance_history
             conn = self._ensure_connection()
             c = conn.cursor()
             c.execute('''
-                INSERT INTO clothing_history (session_id, character_name, clothing, triggered_by_message_id)
+                INSERT INTO appearance_history (session_id, character_name, appearance, triggered_by_message_id)
                 VALUES (?, ?, ?, ?)
-            ''', (session_id, character_name, updated_clothing, triggered_by_message_id))
+            ''', (session_id, character_name, updated_appearance, triggered_by_message_id))
             conn.commit()
             conn.close()
 
@@ -430,9 +430,9 @@ class DBManager:
                      why_action: Optional[str]=None,
                      why_dialogue: Optional[str]=None,
                      why_new_location: Optional[str]=None,
-                     why_new_clothing: Optional[str]=None,
+                     why_new_appearance: Optional[str]=None,
                      new_location: Optional[str]=None,
-                     new_clothing: Optional[str]=None) -> int:
+                     new_appearance: Optional[str]=None) -> int:
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
@@ -440,8 +440,8 @@ class DBManager:
                 session_id, sender, message, visible, message_type,
                 affect, purpose,
                 why_purpose, why_affect, why_action, why_dialogue, 
-                why_new_location, why_new_clothing,
-                new_location, new_clothing
+                why_new_location, why_new_appearance,
+                new_location, new_appearance
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
@@ -457,9 +457,9 @@ class DBManager:
             why_action,
             why_dialogue,
             why_new_location,
-            why_new_clothing,
+            why_new_appearance,
             new_location,
-            new_clothing
+            new_appearance
         ))
         message_id = c.lastrowid
         conn.commit()
@@ -475,8 +475,8 @@ class DBManager:
                 id, sender, message, visible, message_type,
                 affect, purpose, created_at,
                 why_purpose, why_affect, why_action, why_dialogue,
-                why_new_location, why_new_clothing,
-                new_location, new_clothing
+                why_new_location, why_new_appearance,
+                new_location, new_appearance
             FROM messages
             WHERE session_id = ?
             ORDER BY id ASC
@@ -498,9 +498,9 @@ class DBManager:
                 'why_action': row[10],
                 'why_dialogue': row[11],
                 'why_new_location': row[12],
-                'why_new_clothing': row[13],
+                'why_new_appearance': row[13],
                 'new_location': row[14],
-                'new_clothing': row[15],
+                'new_appearance': row[15],
             })
         conn.close()
         logger.debug(f"Retrieved {len(messages)} messages for session '{session_id}'.")

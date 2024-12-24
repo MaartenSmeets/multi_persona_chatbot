@@ -10,6 +10,9 @@
   description: "An exclusive hideaway deep within Thailand's lush islands, where turquoise waters meet pristine white sand beaches under a balmy tropical sky."
   start_location: "A secluded private villa on the beach, featuring an outdoor pool that flows into the sea. The atmosphere is set with soft music and warm candlelight at sunset. Inside, a luxurious king-size bed sits atop plush carpeting, surrounded by large windows offering breathtaking ocean views. The room is cooled to perfection, filled with the sweet scent of frangipani flowers."
 
+- name: "Intimate Setting 3"
+  description: "A locked romantic bedroom in a love hotel"
+  start_location: "A locked romantic bedroom with big bed and sound isolating walls"
 - name: "Formal Setting"
   description: "A sophisticated corporate environment crafted for productive and structured professional interactions, ensuring clarity and focus."
   start_location: "A spacious and modern boardroom on the top floor of a skyscraper, featuring a polished oak table, ergonomic chairs, and a high-resolution projector displaying a presentation. Floor-to-ceiling windows reveal an expansive view of the city's skyline, adding a touch of grandeur."
