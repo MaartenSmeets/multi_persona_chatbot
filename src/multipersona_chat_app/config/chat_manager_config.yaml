@@ -1,3 +1,2 @@
-max_dialogue_length_before_summarization: 20
-lines_to_keep_after_summarization: 5
-to_summarize_count: 15
+summarization_threshold: 20
+recent_dialogue_lines: 5

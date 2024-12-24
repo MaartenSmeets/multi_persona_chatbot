@@ -25,10 +25,10 @@ class ChatManager:
 
         config_path = os.path.join("src", "multipersona_chat_app", "config", "chat_manager_config.yaml")
         self.config = self.load_config(config_path)
-        
-        self.max_dialogue_length_before_summarization = self.config.get('max_dialogue_length_before_summarization', 20)
-        self.lines_to_keep_after_summarization = self.config.get('lines_to_keep_after_summarization', 5)
-        self.to_summarize_count = self.config.get('to_summarize_count', 15)
+
+        self.summarization_threshold = self.config.get('summarization_threshold', 20)
+        self.recent_dialogue_lines = self.config.get('recent_dialogue_lines', 5)
+        self.to_summarize_count = self.summarization_threshold - self.recent_dialogue_lines
 
         db_path = os.path.join("output", "conversations.db")
         self.db = DBManager(db_path)
@@ -165,9 +165,16 @@ class ChatManager:
         return message_id
 
     def get_visible_history(self):
-        msgs = self.db.get_messages(self.session_id)
-        return [(m["sender"], m["message"], m["message_type"], m["affect"], m["id"])
-                for m in msgs if m["visible"]]
+        # Retrieve all visible messages, including summaries and recent dialogue lines
+        summaries = self.db.get_all_summaries(self.session_id, None)  # Assuming None fetches all summaries
+        visible_msgs = self.db.get_messages(self.session_id)
+        recent_msgs = visible_msgs[-self.recent_dialogue_lines:]
+        history = [(m["sender"], m["message"], m["message_type"], m["affect"], m["id"])
+                   for m in summaries] + [
+                   (m["sender"], m["message"], m["message_type"], m["affect"], m["id"])
+                   for m in recent_msgs if m["visible"]
+               ]
+        return history
 
     def build_prompt_for_character(self, character_name: str) -> Tuple[str, str]:
         existing_prompts = self.db.get_character_prompts(self.session_id, character_name)
@@ -180,7 +187,7 @@ class ChatManager:
         # Get the required values directly
         visible_history = self.get_visible_history()
 
-        # FIX: include speaker name in latest dialogue
+        # Include speaker name in the latest dialogue
         if visible_history:
             last_speaker = visible_history[-1][0]
             last_message_text = visible_history[-1][1]
@@ -315,7 +322,7 @@ class ChatManager:
             if m["visible"] and m["message_type"] != "system" and m["id"] > last_covered_id
         ]
 
-        if len(relevant_msgs) < self.max_dialogue_length_before_summarization:
+        if len(relevant_msgs) < self.summarization_threshold:
             return
 
         to_summarize = relevant_msgs[:self.to_summarize_count]
@@ -348,10 +355,10 @@ Now produce a short summary from {character_name}'s viewpoint.
 
         self.db.save_new_summary(self.session_id, character_name, new_summary, covered_up_to_message_id)
 
-        # Hide old messages from the visible log, except for a few lines
+        # Hide old messages from the visible log, except for recent_dialogue_lines
         to_hide_ids = [m[0] for m in to_summarize]
-        if len(to_hide_ids) > self.lines_to_keep_after_summarization:
-            ids_to_hide = to_hide_ids[:-self.lines_to_keep_after_summarization]
+        if len(to_hide_ids) > self.recent_dialogue_lines:
+            ids_to_hide = to_hide_ids[:-self.recent_dialogue_lines]
         else:
             ids_to_hide = to_hide_ids[:]
 
@@ -398,3 +405,13 @@ Now produce a short summary from {character_name}'s viewpoint.
             logger.info(f"Character '{character_name}' updated clothing to '{new_clothing}'.")
         else:
             logger.debug(f"No clothing update needed for '{character_name}'.")
+
+    def get_all_visible_messages(self) -> List[Dict]:
+        """
+        Retrieves all visible messages, including summaries and recent dialogue lines.
+        """
+        summaries = self.db.get_all_summaries(self.session_id, None)  # Assuming None fetches all summaries
+        visible_msgs = self.db.get_messages(self.session_id)
+        recent_msgs = visible_msgs[-self.recent_dialogue_lines:]
+        history = summaries + [m for m in recent_msgs if m["visible"]]
+        return history
