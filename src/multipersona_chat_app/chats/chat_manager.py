@@ -178,7 +178,7 @@ class ChatManager:
         system_prompt = existing_prompts['character_system_prompt']
         dynamic_prompt_template = existing_prompts['dynamic_prompt_template']
 
-        # 2) Fill in the dynamic placeholders in dynamic_prompt_template
+        # Get the required values directly
         visible_history = self.get_visible_history()
         latest_dialogue = visible_history[-1][1] if visible_history else ""
         all_summaries = self.db.get_all_summaries(self.session_id, character_name)
@@ -191,20 +191,19 @@ class ChatManager:
         location = self.get_combined_location()
         current_outfit = self.db.get_character_clothing(self.session_id, character_name)
 
-        # Now do the final formatting using .format()
+        # Replace placeholders one by one using replace()
         try:
-            dynamic_prompt_template = dynamic_prompt_template.format(
-                setting=setting_description,
-                chat_history_summary=chat_history_summary,
-                latest_dialogue=latest_dialogue,
-                current_location=location,
-                current_outfit=current_outfit
-            )
-        except KeyError as e:
-            logger.error(f"Missing placeholder in dynamic_prompt_template: {e}")
+            formatted_prompt = dynamic_prompt_template
+            formatted_prompt = formatted_prompt.replace("{setting}", setting_description)
+            formatted_prompt = formatted_prompt.replace("{chat_history_summary}", chat_history_summary)
+            formatted_prompt = formatted_prompt.replace("{latest_dialogue}", latest_dialogue)
+            formatted_prompt = formatted_prompt.replace("{current_location}", location)
+            formatted_prompt = formatted_prompt.replace("{current_outfit}", current_outfit)
+        except Exception as e:
+            logger.error(f"Error replacing placeholders in dynamic_prompt_template: {e}")
             raise
 
-        return (system_prompt, dynamic_prompt_template)
+        return system_prompt, formatted_prompt
 
     def build_introduction_prompts_for_character(self, character_name: str) -> Tuple[str, str]:
         """

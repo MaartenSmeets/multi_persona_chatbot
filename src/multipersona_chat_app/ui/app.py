@@ -481,17 +481,20 @@ async def generate_character_message(character_name: str):
     if not introductions_given[character_name] and not char_spoken_before:
         await generate_character_introduction_message(character_name)
         return
-    system_prompt = prompts['character_system_prompt']
-    dynamic_prompt_template = prompts['dynamic_prompt_template']
 
+    # **Updated Section Starts Here**
     try:
+        # Call build_prompt_for_character to get the formatted prompt
+        system_prompt, formatted_prompt = chat_manager.build_prompt_for_character(character_name)
+
         # IMPORTANT: use_cache=False to force a fresh LLM response each time
         interaction = await run.io_bound(
             llm_client.generate,
-            prompt=dynamic_prompt_template,
+            prompt=formatted_prompt,  # Use the formatted prompt with placeholders replaced
             system=system_prompt,
             use_cache=False  # Force new response to avoid repetitive loops
         )
+
         if isinstance(interaction, Interaction):
             if (not interaction.purpose.strip()
                 or not interaction.affect.strip()
@@ -512,8 +515,8 @@ async def generate_character_message(character_name: str):
                     why_dialogue=interaction.why_dialogue,
                     why_new_location=interaction.why_new_location,
                     why_new_clothing=interaction.why_new_clothing,
-                    new_location=interaction.new_location if interaction.new_location.strip() else None,
-                    new_clothing=interaction.new_clothing if interaction.new_clothing.strip() else None
+                    new_location=interaction.new_location.strip() if interaction.new_location.strip() else None,
+                    new_clothing=interaction.new_clothing.strip() if interaction.new_clothing.strip() else None
                 )
                 if interaction.new_location.strip():
                     await chat_manager.handle_new_location_for_character(character_name, interaction.new_location, msg_id)
@@ -533,6 +536,7 @@ async def generate_character_message(character_name: str):
     show_chat_display.refresh()
     show_character_locations.refresh()
     show_character_clothing.refresh()
+    # **Updated Section Ends Here**
 
 async def send_user_message():
     message = user_input.value.strip()
