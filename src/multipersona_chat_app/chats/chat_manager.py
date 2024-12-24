@@ -304,7 +304,7 @@ class ChatManager:
                 parts.append(f"{c_name} is wearing: {c_clothes}")
                 logger.warning(f"Character '{c_name}' has no known location.")
             else:
-                parts.append(f"{c_name} is at {c_loc}, wearing: {c_clothes}")
+                parts.append(f"{c_name}'s location: {c_loc}, wearing: {c_clothes}")
         if not parts:
             session_loc = self.db.get_current_location(self.session_id)
             if not session_loc and self.current_setting in self.settings:
