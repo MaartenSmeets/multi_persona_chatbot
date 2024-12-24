@@ -85,6 +85,7 @@ class ChatManager:
         try:
             with open(config_path, 'r') as file:
                 config = yaml.safe_load(file)
+            logger.info(f"Configuration loaded successfully from {config_path}")
             return config if config else {}
         except Exception as e:
             logger.error(f"Error loading config from {config_path}: {e}")
@@ -165,15 +166,15 @@ class ChatManager:
         return message_id
 
     def get_visible_history(self):
-        # Retrieve all visible messages, including summaries and recent dialogue lines
+        """
+        Retrieve all visible messages, including summaries and recent dialogue lines.
+        Returns a list of message dictionaries.
+        """
         summaries = self.db.get_all_summaries(self.session_id, None)  # Assuming None fetches all summaries
         visible_msgs = self.db.get_messages(self.session_id)
         recent_msgs = visible_msgs[-self.recent_dialogue_lines:]
-        history = [(m["sender"], m["message"], m["message_type"], m["affect"], m["id"])
-                   for m in summaries] + [
-                   (m["sender"], m["message"], m["message_type"], m["affect"], m["id"])
-                   for m in recent_msgs if m["visible"]
-               ]
+        history = summaries + [m for m in recent_msgs if m["visible"]]
+        logger.debug(f"Retrieved {len(history)} messages for visible history.")
         return history
 
     def build_prompt_for_character(self, character_name: str) -> Tuple[str, str]:
@@ -187,13 +188,22 @@ class ChatManager:
         # Get the required values directly
         visible_history = self.get_visible_history()
 
-        # Include speaker name in the latest dialogue
-        if visible_history:
-            last_speaker = visible_history[-1][0]
-            last_message_text = visible_history[-1][1]
-            latest_dialogue = f"{last_speaker}: {last_message_text}"
-        else:
-            latest_dialogue = ""
+        # Collect up to recent_dialogue_lines messages
+        recent_msgs = visible_history[-self.recent_dialogue_lines:]
+
+        formatted_dialogue_lines = []
+        for msg in recent_msgs:
+            if msg['sender'] == self.you_name and msg['message_type'] == 'user':
+                # Personal line: include all relevant information
+                affect = msg.get('affect', 'N/A')
+                purpose = msg.get('purpose', 'N/A')
+                line = f"You [Affect: {affect}, Purpose: {purpose}]: {msg['message']}"
+            else:
+                # Other characters: only sender and message
+                line = f"{msg['sender']}: {msg['message']}"
+            formatted_dialogue_lines.append(line)
+
+        latest_dialogue = "\n".join(formatted_dialogue_lines)
 
         all_summaries = self.db.get_all_summaries(self.session_id, character_name)
         chat_history_summary = "\n\n".join(all_summaries) if all_summaries else ""
@@ -217,6 +227,8 @@ class ChatManager:
             logger.error(f"Error replacing placeholders in dynamic_prompt_template: {e}")
             raise
 
+        logger.debug(f"Built prompt for character '{character_name}':\n{formatted_prompt}")
+
         return system_prompt, formatted_prompt
 
     def build_introduction_prompts_for_character(self, character_name: str) -> Tuple[str, str]:
@@ -234,7 +246,7 @@ class ChatManager:
 
         # For introduction, we use INTRODUCTION_TEMPLATE as the "user" content
         visible_history = self.get_visible_history()
-        latest_dialogue = visible_history[-1][1] if visible_history else ""
+        latest_dialogue = visible_history[-1]['message'] if visible_history else ""
         all_summaries = self.db.get_all_summaries(self.session_id, character_name)
         chat_history_summary = "\n\n".join(all_summaries) if all_summaries else ""
 
@@ -322,16 +334,21 @@ class ChatManager:
             if m["visible"] and m["message_type"] != "system" and m["id"] > last_covered_id
         ]
 
+        logger.debug(f"Summarizing history for '{character_name}'. Total relevant messages: {len(relevant_msgs)} (threshold: {self.summarization_threshold})")
+
         if len(relevant_msgs) < self.summarization_threshold:
+            logger.debug(f"Not enough messages to summarize for '{character_name}'. Required: {self.summarization_threshold}, available: {len(relevant_msgs)}.")
             return
 
         to_summarize = relevant_msgs[:self.to_summarize_count]
         covered_up_to_message_id = to_summarize[-1][0] if to_summarize else last_covered_id
 
+        logger.debug(f"Messages to summarize for '{character_name}': {len(to_summarize)}. Covering up to message ID: {covered_up_to_message_id}.")
+
         history_lines = []
         for (mid, sender, message, affect, purpose) in to_summarize:
             if sender == character_name:
-                line = f"{sender} (own affect: {affect}, own purpose: {purpose}): {message}"
+                line = f"{sender} (Affect: {affect}, Purpose: {purpose}): {message}"
             else:
                 line = f"{sender}: {message}"
             history_lines.append(line)
@@ -348,8 +365,12 @@ Recent events to summarize:
 Now produce a short summary from {character_name}'s viewpoint.
 """
 
+        logger.debug(f"Summarization prompt for '{character_name}':\n{prompt}")
+
         summarize_llm = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml')
         new_summary = summarize_llm.generate(prompt=prompt)
+        logger.debug(f"Summarization response for '{character_name}': {new_summary}")
+
         if not new_summary:
             new_summary = "No significant new events."
 
@@ -366,11 +387,16 @@ Now produce a short summary from {character_name}'s viewpoint.
             conn = self.db._ensure_connection()
             c = conn.cursor()
             placeholders = ",".join("?" * len(ids_to_hide))
-            c.execute(f"UPDATE messages SET visible=0 WHERE id IN ({placeholders})", ids_to_hide)
-            conn.commit()
-            conn.close()
+            try:
+                c.execute(f"UPDATE messages SET visible=0 WHERE id IN ({placeholders})", ids_to_hide)
+                conn.commit()
+                logger.debug(f"Hid message IDs for '{character_name}': {ids_to_hide}")
+            except Exception as e:
+                logger.error(f"Error hiding messages for '{character_name}': {e}")
+            finally:
+                conn.close()
 
-        logger.info(f"Summarized and concealed old messages for {character_name}, up to message ID {covered_up_to_message_id}.")
+        logger.info(f"Summarized and concealed old messages for '{character_name}', up to message ID {covered_up_to_message_id}.")
 
     def get_session_name(self) -> str:
         sessions = self.db.get_all_sessions()

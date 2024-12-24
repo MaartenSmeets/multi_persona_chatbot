@@ -83,8 +83,9 @@ class DBManager:
         for col, ctype in columns_to_add:
             try:
                 c.execute(f"ALTER TABLE messages ADD COLUMN {col} {ctype}")
+                logger.info(f"Added column '{col}' to 'messages' table.")
             except sqlite3.OperationalError:
-                pass  # Column already exists
+                logger.debug(f"Column '{col}' already exists in 'messages' table. Skipping.")
 
         # Create summaries table
         c.execute('''
@@ -124,8 +125,9 @@ class DBManager:
         ''')
         try:
             c.execute("ALTER TABLE session_characters ADD COLUMN current_clothing TEXT")
+            logger.info("Added column 'current_clothing' to 'session_characters' table.")
         except sqlite3.OperationalError:
-            pass
+            logger.debug("Column 'current_clothing' already exists in 'session_characters' table. Skipping.")
 
         # Create clothing_history table for storing chronological clothing changes
         c.execute('''
@@ -522,11 +524,18 @@ class DBManager:
     def get_all_summaries(self, session_id: str, character_name: str) -> List[str]:
         conn = self._ensure_connection()
         c = conn.cursor()
-        c.execute('''
-            SELECT summary FROM summaries
-            WHERE session_id = ? AND character_name = ?
-            ORDER BY id ASC
-        ''', (session_id, character_name))
+        if character_name:
+            c.execute('''
+                SELECT summary FROM summaries
+                WHERE session_id = ? AND character_name = ?
+                ORDER BY id ASC
+            ''', (session_id, character_name))
+        else:
+            c.execute('''
+                SELECT summary FROM summaries
+                WHERE session_id = ?
+                ORDER BY id ASC
+            ''', (session_id,))
         rows = c.fetchall()
         summaries = [row[0] for row in rows]
         conn.close()
@@ -563,10 +572,12 @@ class DBManager:
         row = c.fetchone()
         conn.close()
         if row:
+            logger.debug(f"Retrieved prompts for character '{character_name}' in session '{session_id}'.")
             return {
                 'character_system_prompt': row[0],
                 'dynamic_prompt_template': row[1]
             }
+        logger.debug(f"No prompts found for character '{character_name}' in session '{session_id}'.")
         return None
 
     def save_character_prompts(self, session_id: str, character_name: str, character_system_prompt: str, dynamic_prompt_template: str):
