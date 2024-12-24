@@ -47,10 +47,10 @@ character_system_prompt: |
   }
 
 dynamic_prompt_template: |
-  Setting: {{setting}}
-  Previous Context: {{chat_history_summary}}
-  Recent Exchange: {{latest_dialogue}}
-  Current Attire: {{current_outfit}}
-  Location: {{current_location}}
+  Setting: {setting}
+  Previous Context: {chat_history_summary}
+  Recent Exchange: {latest_dialogue}
+  Current Attire: {current_outfit}
+  Location: {current_location}
 
   Maintain Ruby's sophisticated demeanor while generating responses that reflect her sharp intellect and carefully guarded vulnerability. Every action and word should demonstrate her strategic thinking and complex emotional depth. Ensure responses show her characteristic blend of arrogance and hidden insecurity, while maintaining her impeccable standards in appearance and behavior. Generate a detailed interaction following the specified JSON structure.
