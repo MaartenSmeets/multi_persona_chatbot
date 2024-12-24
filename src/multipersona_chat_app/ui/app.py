@@ -234,6 +234,7 @@ def load_session(session_id: str):
     chat_manager.characters = {}
     introductions_given.clear()
 
+    # Handle setting
     current_setting_name = chat_manager.db.get_current_setting(session_id)
     setting = next((s for s in ALL_SETTINGS if s['name'] == current_setting_name), None)
     if setting:
@@ -257,14 +258,26 @@ def load_session(session_id: str):
         else:
             logger.error("No setting found and 'Intimate Setting' not available.")
 
+    # Load characters and create async tasks for prompt generation
     session_chars = chat_manager.db.get_session_characters(session_id)
-    for c_name in session_chars:
-        if c_name in ALL_CHARACTERS:
-            chat_manager.add_character(c_name, ALL_CHARACTERS[c_name])
-            introductions_given[c_name] = False
-            asyncio.create_task(generate_character_specific_prompts(c_name))
-        else:
-            logger.warning(f"Character '{c_name}' found in DB but not in ALL_CHARACTERS.")
+    async def init_characters():
+        for c_name in session_chars:
+            if c_name in ALL_CHARACTERS:
+                chat_manager.add_character(c_name, ALL_CHARACTERS[c_name])
+                introductions_given[c_name] = False
+                await generate_character_specific_prompts(c_name)
+            else:
+                logger.warning(f"Character '{c_name}' found in DB but not in ALL_CHARACTERS.")
+
+    # Create and run the coroutine in the current event loop
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        # If no event loop exists, create a new one
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    loop.run_until_complete(init_characters())
 
     refresh_added_characters()
     show_chat_display.refresh()
