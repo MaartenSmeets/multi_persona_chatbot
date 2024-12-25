@@ -203,6 +203,10 @@ class ChatManager:
                 line = f"{msg['sender']}: {msg['message']}"
             formatted_dialogue_lines.append(line)
 
+        # Make the latest dialogue line explicit
+        if formatted_dialogue_lines:
+            formatted_dialogue_lines[-1] = f"### Latest Dialogue Line:\n{formatted_dialogue_lines[-1]}"
+
         latest_dialogue = "\n".join(formatted_dialogue_lines)
 
         all_summaries = self.db.get_all_summaries(self.session_id, character_name)
@@ -247,6 +251,11 @@ class ChatManager:
         # For introduction, we use INTRODUCTION_TEMPLATE as the "user" content
         visible_history = self.get_visible_history()
         latest_dialogue = visible_history[-1]['message'] if visible_history else ""
+        
+        # Make the latest dialogue line explicit
+        if latest_dialogue:
+            latest_dialogue = f"### Latest Dialogue Line:\n{latest_dialogue}"
+
         all_summaries = self.db.get_all_summaries(self.session_id, character_name)
         chat_history_summary = "\n\n".join(all_summaries) if all_summaries else ""
 

@@ -59,7 +59,7 @@ dynamic_prompt_template: |
   Current Location: {current_location}
 
   INTERACTION GUIDELINES:
-    - Prioritize engaging directly with the latest interaction, focusing on its context and implications, especially if it involves significant or problematic developments; otherwise, reference broader context only as needed.
+    - Prioritize engaging directly with the latest interaction, especially if it involves significant or problematic developments; otherwise, reference broader context only as needed.
     - Utilize details from the current setting to shape emotions and inform actions.
     - Reflect relationship dynamics and ongoing narrative by considering chat history in responses.
     - Ensure responses align with current appearance and location, making them situationally fitting and natural.
