@@ -123,7 +123,9 @@ Produce a JSON object with the following fields:
 
 - introduction_text: A free-form text providing an immersive elaborate introduction of the character. Be detailed here to give a good impression of the character.
 - current_appearance: A description of the character's current appearance.
-- current_location: A description of where the character is currently located. 
+- current_location: A description of where the character is currently located.
+
+Remember to stay in character as {character_name} and remain immersive.
 """
 
 CHARACTER_INTRODUCTION_SYSTEM_PROMPT_TEMPLATE = r"""
