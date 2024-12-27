@@ -1,5 +1,5 @@
 api_url: "http://localhost:11434/api/generate"  # Replace with your Ollama API endpoint
-model_name: "dolphin-mixtral:8x22b-v2.9-q3_K_S" #"Euryale-v2.3:latest"  # Specify the model version
+model_name: "Euryale-v2.3:latest" #"Euryale-v2.3:latest"  # Specify the model version
 api_key: ""  # Optional: Include if authentication is required
 max_retries: 3  # Number of retries for LLM requests
 temperature: 0.85  # Default temperature
