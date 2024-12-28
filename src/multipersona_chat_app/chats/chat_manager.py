@@ -1,3 +1,5 @@
+# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/chats/chat_manager.py
+
 import os
 import logging
 from typing import List, Dict, Tuple, Optional
@@ -11,8 +13,19 @@ from templates import (
     CHARACTER_INTRODUCTION_SYSTEM_PROMPT_TEMPLATE
 )
 from models.interaction import Interaction
+from pydantic import BaseModel
+import json
 
 logger = logging.getLogger(__name__)
+
+class InteractionValidationOutput(BaseModel):
+    """
+    A structured output to check if the interaction is valid according to
+    the character's system prompt and dynamic prompt template. If not valid,
+    we receive a corrected version to try again or to store if within iteration count.
+    """
+    is_valid: str
+    corrected_interaction: Optional[Interaction] = None
 
 class ChatManager:
     def __init__(self, you_name: str = "You", session_id: Optional[str] = None, settings: List[Dict] = []):
@@ -26,9 +39,12 @@ class ChatManager:
         config_path = os.path.join("src", "multipersona_chat_app", "config", "chat_manager_config.yaml")
         self.config = self.load_config(config_path)
 
+        # Added retrieval of validation_loop config
         self.summarization_threshold = self.config.get('summarization_threshold', 20)
         self.recent_dialogue_lines = self.config.get('recent_dialogue_lines', 5)
         self.to_summarize_count = self.summarization_threshold - self.recent_dialogue_lines
+
+        self.validation_loop_setting = self.config.get('validation_loop', 1)
 
         db_path = os.path.join("output", "conversations.db")
         self.db = DBManager(db_path)
@@ -110,7 +126,26 @@ class ChatManager:
     def add_character(self, char_name: str, char_instance: Character):
         self.characters[char_name] = char_instance
         current_session_loc = self.db.get_current_location(self.session_id) or ""
-        self.db.add_character_to_session(self.session_id, char_name, initial_location=current_session_loc, initial_appearance=char_instance.appearance)
+        self.db.add_character_to_session(
+            self.session_id, 
+            char_name, 
+            initial_location=current_session_loc,
+            initial_appearance=char_instance.appearance
+        )
+        
+        ###############################################################################
+        # NEW FIX: Store the prompts in the DB if they exist in the character's YAML. #
+        ###############################################################################
+        if char_instance.character_system_prompt and char_instance.dynamic_prompt_template:
+            self.db.save_character_prompts(
+                self.session_id,
+                char_name,
+                char_instance.character_system_prompt,
+                char_instance.dynamic_prompt_template
+            )
+            logger.info(f"Stored system/dynamic prompts for '{char_name}' from YAML in DB.")
+        else:
+            logger.warning(f"No system/dynamic prompts found in YAML for '{char_name}'.")
 
     def remove_character(self, char_name: str):
         if char_name in self.characters:
@@ -166,11 +201,7 @@ class ChatManager:
         return message_id
 
     def get_visible_history(self):
-        """
-        Retrieve all visible messages, including summaries and recent dialogue lines.
-        Returns a list of message dictionaries.
-        """
-        summaries = self.db.get_all_summaries(self.session_id, None)  # Assuming None fetches all summaries
+        summaries = self.db.get_all_summaries(self.session_id, None)
         visible_msgs = self.db.get_messages(self.session_id)
         recent_msgs = visible_msgs[-self.recent_dialogue_lines:]
         history = summaries + [m for m in recent_msgs if m["visible"]]
@@ -180,30 +211,24 @@ class ChatManager:
     def build_prompt_for_character(self, character_name: str) -> Tuple[str, str]:
         existing_prompts = self.db.get_character_prompts(self.session_id, character_name)
         if not existing_prompts:
-            raise ValueError(f"Existing prompts not found in the session.")
+            raise ValueError(f"Existing prompts not found in the session for '{character_name}'. They must be in the YAML.")
 
         system_prompt = existing_prompts['character_system_prompt']
         dynamic_prompt_template = existing_prompts['dynamic_prompt_template']
 
-        # Get the required values directly
         visible_history = self.get_visible_history()
-
-        # Collect up to recent_dialogue_lines messages
         recent_msgs = visible_history[-self.recent_dialogue_lines:]
 
         formatted_dialogue_lines = []
         for msg in recent_msgs:
             if msg['sender'] == self.you_name and msg['message_type'] == 'user':
-                # Personal line: include all relevant information
                 affect = msg.get('affect', 'N/A')
                 purpose = msg.get('purpose', 'N/A')
                 line = f"You [Affect: {affect}, Purpose: {purpose}]: {msg['message']}"
             else:
-                # Other characters: only sender and message
                 line = f"{msg['sender']}: {msg['message']}"
             formatted_dialogue_lines.append(line)
 
-        # Make the latest dialogue line explicit
         if formatted_dialogue_lines:
             formatted_dialogue_lines[-1] = f"### Latest Dialogue Line:\n{formatted_dialogue_lines[-1]}"
 
@@ -219,7 +244,6 @@ class ChatManager:
         location = self.get_combined_location()
         current_appearance = self.db.get_character_appearance(self.session_id, character_name)
 
-        # Replace placeholders one by one using replace()
         try:
             formatted_prompt = dynamic_prompt_template
             formatted_prompt = formatted_prompt.replace("{setting}", setting_description)
@@ -236,10 +260,6 @@ class ChatManager:
         return system_prompt, formatted_prompt
 
     def build_introduction_prompts_for_character(self, character_name: str) -> Tuple[str, str]:
-        """
-        Return a (system_prompt, user_prompt) tuple for the introduction.
-        If system prompt wasn't stored yet, we'll generate & store it here as well.
-        """
         char = self.characters[character_name]
 
         system_prompt = CHARACTER_INTRODUCTION_SYSTEM_PROMPT_TEMPLATE.format(
@@ -248,11 +268,9 @@ class ChatManager:
             appearance=char.appearance,
         )
 
-        # For introduction, we use INTRODUCTION_TEMPLATE as the "user" content
         visible_history = self.get_visible_history()
         latest_dialogue = visible_history[-1]['message'] if visible_history else ""
         
-        # Make the latest dialogue line explicit
         if latest_dialogue:
             latest_dialogue = f"### Latest Dialogue Line:\n{latest_dialogue}"
 
@@ -268,7 +286,7 @@ class ChatManager:
             session_loc = self.settings[self.current_setting].get('start_location', '')
 
         user_prompt = INTRODUCTION_TEMPLATE.format(
-            name=character_name,  # for legacy usage if needed
+            name=character_name,
             character_name=character_name,
             appearance=self.characters[character_name].appearance,
             character_description=self.characters[character_name].character_description,
@@ -356,7 +374,6 @@ class ChatManager:
 
         history_lines = []
         for (mid, sender, message, affect, purpose) in to_summarize:
-            # Focus on newly revealed or changed details (feelings, location, appearance...)
             if sender == character_name:
                 line = f"{sender} (Affect: {affect}, Purpose: {purpose}): {message}"
             else:
@@ -443,11 +460,123 @@ Now produce a short summary from {character_name}'s viewpoint.
             logger.debug(f"No appearance update needed for '{character_name}'.")
 
     def get_all_visible_messages(self) -> List[Dict]:
-        """
-        Retrieves all visible messages, including summaries and recent dialogue lines.
-        """
-        summaries = self.db.get_all_summaries(self.session_id, None)  # Assuming None fetches all summaries
+        summaries = self.db.get_all_summaries(self.session_id, None)
         visible_msgs = self.db.get_messages(self.session_id)
         recent_msgs = visible_msgs[-self.recent_dialogue_lines:]
         history = summaries + [m for m in recent_msgs if m["visible"]]
         return history
+
+    async def validate_and_possibly_correct_interaction(
+        self,
+        character_name: str,
+        system_prompt: str,
+        dynamic_prompt: str,
+        initial_interaction: Interaction
+    ) -> Optional[Interaction]:
+        """
+        Validates (and if needed corrects) the given interaction to ensure
+        it conforms to character_system_prompt and dynamic_prompt_template.
+        Returns a valid Interaction or None if it cannot be validated in the allowed iterations.
+        """
+
+        # If validation_loop_setting == 0 => skip validation and store as-is
+        if self.validation_loop_setting == 0:
+            return initial_interaction
+
+        validation_client = OllamaClient(
+            'src/multipersona_chat_app/config/llm_config.yaml',
+            output_model=InteractionValidationOutput
+        )
+
+        current_interaction = initial_interaction
+        iteration = 0
+
+        while True:
+            iteration += 1
+            logger.debug(f"Validation iteration {iteration} for character '{character_name}'")
+
+            validation_prompt = f"""You are checking if the following JSON interaction is valid according to the character's system prompt and dynamic prompt.
+
+System Prompt (character rules, guidelines):
+{system_prompt}
+
+Dynamic Prompt (with relevant context):
+{dynamic_prompt}
+
+The user-generated interaction JSON to validate:
+{current_interaction.json()}
+
+Please reply in valid JSON format with the following fields:
+{{
+  "is_valid": "yes" or "no",
+  "corrected_interaction": {{
+      "purpose": "...",
+      "why_purpose": "...",
+      "affect": "...",
+      "why_affect": "...",
+      "action": "...",
+      "why_action": "...",
+      "dialogue": "...",
+      "why_dialogue": "...",
+      "new_location": "...",
+      "why_new_location": "...",
+      "new_appearance": "...",
+      "why_new_appearance": "..."
+  }}
+}}
+- If is_valid is "yes", do NOT provide a corrected_interaction (or leave it empty if you must).
+- If is_valid is "no", provide a corrected_interaction with valid fields.
+
+Only produce valid JSON with these two top-level keys: "is_valid" and "corrected_interaction". 
+Include all fields in "corrected_interaction" if is_valid="no".
+"""
+
+            result = validation_client.generate(
+                prompt=validation_prompt,
+                system=None,
+                use_cache=False
+            )
+
+            if not result:
+                logger.warning(f"Validation request returned no result for iteration {iteration}.")
+                if self.validation_loop_setting == -1:
+                    continue
+                if self.validation_loop_setting > 0 and iteration >= self.validation_loop_setting:
+                    return None
+                continue
+
+            if isinstance(result, InteractionValidationOutput):
+                validation_output = result
+            else:
+                try:
+                    validation_output = InteractionValidationOutput.parse_raw(result)
+                except Exception as parse_e:
+                    logger.warning(f"Failed to parse validation output: {parse_e}")
+                    if self.validation_loop_setting == -1:
+                        continue
+                    if self.validation_loop_setting > 0 and iteration >= self.validation_loop_setting:
+                        return None
+                    continue
+
+            if validation_output.is_valid.lower() == "yes":
+                logger.debug(f"Interaction is valid on iteration {iteration}.")
+                return current_interaction
+
+            corrected = validation_output.corrected_interaction
+            if not corrected:
+                logger.warning("Validation said 'no' but didn't provide a corrected_interaction.")
+                if self.validation_loop_setting == -1:
+                    continue
+                if self.validation_loop_setting > 0 and iteration >= self.validation_loop_setting:
+                    return None
+                continue
+
+            current_interaction = corrected
+
+            if self.validation_loop_setting > 0 and iteration >= self.validation_loop_setting:
+                logger.warning("Reached validation iteration limit without achieving 'is_valid=yes'.")
+                return None
+            # If -1, continue infinitely until "yes".
+        
+        # Shouldn't get here
+        return None

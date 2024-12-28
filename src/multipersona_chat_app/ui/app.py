@@ -13,8 +13,8 @@ from chats.chat_manager import ChatManager
 from utils import load_settings, get_available_characters
 from templates import (
     CharacterIntroductionOutput,
-    CharacterPromptGenOutput,
-    CHARACTER_PROMPT_GENERATION_TEMPLATE
+    INTRODUCTION_TEMPLATE,
+    CHARACTER_INTRODUCTION_SYSTEM_PROMPT_TEMPLATE
 )
 
 logger = logging.getLogger(__name__)
@@ -30,6 +30,7 @@ added_characters_container = None
 next_speaker_label = None
 next_button = None
 settings_dropdown = None
+setting_description_label = None
 session_dropdown = None
 chat_display = None
 auto_timer = None
@@ -252,26 +253,14 @@ def load_session(session_id: str):
         else:
             logger.error("No setting found and 'Intimate Setting' not available.")
 
-    # Load characters and create async tasks for prompt generation
+    # Re-add session characters from DB (already have system/dynamic prompts stored from YAML)
     session_chars = chat_manager.db.get_session_characters(session_id)
-    async def init_characters():
-        for c_name in session_chars:
-            if c_name in ALL_CHARACTERS:
-                chat_manager.add_character(c_name, ALL_CHARACTERS[c_name])
-                introductions_given[c_name] = False
-                await generate_character_specific_prompts(c_name)
-            else:
-                logger.warning(f"Character '{c_name}' found in DB but not in ALL_CHARACTERS.")
-
-    # Create and run the coroutine in the current event loop
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        # If no event loop exists, create a new one
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    
-    loop.run_until_complete(init_characters())
+    for c_name in session_chars:
+        if c_name in ALL_CHARACTERS:
+            chat_manager.add_character(c_name, ALL_CHARACTERS[c_name])
+            introductions_given[c_name] = False
+        else:
+            logger.warning(f"Character '{c_name}' found in DB but not in ALL_CHARACTERS.")
 
     refresh_added_characters()
     show_chat_display.refresh()
@@ -294,6 +283,8 @@ async def select_setting(event):
             )
             settings_dropdown.value = setting['name']
             settings_dropdown.update()
+            setting_description_label.text = setting['description']
+            setting_description_label.update()
             display_current_location()
             show_character_details.refresh()
         except Exception as pe:
@@ -443,20 +434,16 @@ async def generate_character_message(character_name: str):
     llm_status_label.visible = True
     llm_status_label.update()
 
-    # Ensure that specific prompts are generated before proceeding
+    # Retrieve existing prompts from DB (they come from the YAML file)
     prompts = chat_manager.db.get_character_prompts(chat_manager.session_id, character_name)
     if not prompts:
-        logger.info(f"Specific prompts for '{character_name}' not found. Generating now.")
-        await generate_character_specific_prompts(character_name)
-        prompts = chat_manager.db.get_character_prompts(chat_manager.session_id, character_name)
-        if not prompts:
-            logger.error(f"Failed to generate prompts for '{character_name}'. Aborting message generation.")
-            await notification_queue.put((f"Failed to generate prompts for {character_name}.", 'error'))
-            llm_busy = False
-            llm_status_label.text = ""
-            llm_status_label.visible = False
-            llm_status_label.update()
-            return
+        logger.error(f"No system/dynamic prompts found in the DB for '{character_name}'. They must be in the YAML.")
+        await notification_queue.put((f"Missing prompts for {character_name}. Check YAML!", 'error'))
+        llm_busy = False
+        llm_status_label.text = ""
+        llm_status_label.visible = False
+        llm_status_label.update()
+        return
         
     char_spoken_before = any(
         m for m in chat_manager.db.get_messages(chat_manager.session_id)
@@ -483,36 +470,40 @@ async def generate_character_message(character_name: str):
             use_cache=False  # Force new response to avoid repetitive loops
         )
 
-        if isinstance(interaction, Interaction):
-            if (not interaction.purpose.strip()
-                or not interaction.affect.strip()
-                or not interaction.action.strip()):
-                logger.warning("Received incomplete interaction fields. Not storing message.")
-            else:
-                formatted_message = f"*{interaction.action}*\n{interaction.dialogue}"
+        if not interaction:
+            logger.warning(f"No response for {character_name}. Not storing.")
+        else:
+            # Let chat_manager handle validation; only store if valid
+            validated = await chat_manager.validate_and_possibly_correct_interaction(
+                character_name, system_prompt, formatted_prompt, interaction
+            )
+            if validated:
+                # We now have a valid Interaction
+                final_interaction = validated
+                formatted_message = f"*{final_interaction.action}*\n{final_interaction.dialogue}"
                 msg_id = chat_manager.add_message(
                     character_name,
                     formatted_message,
-                    visible=True,
+                    visible=True,  # Now we can show it
                     message_type="character",
-                    affect=interaction.affect,
-                    purpose=interaction.purpose,
-                    why_purpose=interaction.why_purpose,
-                    why_affect=interaction.why_affect,
-                    why_action=interaction.why_action,
-                    why_dialogue=interaction.why_dialogue,
-                    why_new_location=interaction.why_new_location,
-                    why_new_appearance=interaction.why_new_appearance,
-                    new_location=interaction.new_location.strip() if interaction.new_location.strip() else None,
-                    new_appearance=interaction.new_appearance.strip() if interaction.new_appearance.strip() else None
+                    affect=final_interaction.affect,
+                    purpose=final_interaction.purpose,
+                    why_purpose=final_interaction.why_purpose,
+                    why_affect=final_interaction.why_affect,
+                    why_action=final_interaction.why_action,
+                    why_dialogue=final_interaction.why_dialogue,
+                    why_new_location=final_interaction.why_new_location,
+                    why_new_appearance=final_interaction.why_new_appearance,
+                    new_location=final_interaction.new_location.strip() if final_interaction.new_location.strip() else None,
+                    new_appearance=final_interaction.new_appearance.strip() if final_interaction.new_appearance.strip() else None
                 )
-                if interaction.new_location.strip():
-                    await chat_manager.handle_new_location_for_character(character_name, interaction.new_location, msg_id)
-                if interaction.new_appearance.strip():
-                    await chat_manager.handle_new_appearance_for_character(character_name, interaction.new_appearance, msg_id)
-                logger.debug(f"Message generated for {character_name}: {interaction.dialogue}")
-        else:
-            logger.warning(f"No valid interaction or no response for {character_name}. Not storing.")
+                if final_interaction.new_location.strip():
+                    await chat_manager.handle_new_location_for_character(character_name, final_interaction.new_location, msg_id)
+                if final_interaction.new_appearance.strip():
+                    await chat_manager.handle_new_appearance_for_character(character_name, final_interaction.new_appearance, msg_id)
+                logger.debug(f"Valid message stored for {character_name}: {final_interaction.dialogue}")
+            else:
+                logger.warning(f"Interaction for {character_name} could not be validated or corrected. Not storing.")
     except Exception as e:
         logger.error(f"Error generating message for {character_name}: {e}")
     finally:
@@ -556,7 +547,6 @@ async def add_character_from_dropdown(event):
             chat_manager.add_character(char_name, char)
             chat_manager.db.add_character_to_session(chat_manager.session_id, char_name)
             introductions_given[char_name] = False
-            await generate_character_specific_prompts(char_name)
             refresh_added_characters()
             logger.info(f"Character '{char_name}' added to chat.")
             show_chat_display.refresh()
@@ -581,95 +571,12 @@ async def remove_character_async(name: str):
     show_character_details.refresh()
     update_next_speaker_label()
 
-async def generate_character_specific_prompts(char_name: str):
-    global llm_busy
-    if char_name not in chat_manager.characters:
-        logger.warning(f"Character '{char_name}' not found in chat_manager. Aborting generation.")
-        return
-
-    char = chat_manager.characters[char_name]
-    if char.character_system_prompt and char.dynamic_prompt_template:
-        # Save to database
-        chat_manager.db.save_character_prompts(
-            chat_manager.session_id,
-            char_name,
-            char.character_system_prompt,
-            char.dynamic_prompt_template
-        )
-        logger.info(f"Stored character_system_prompt and dynamic_prompt_template for '{char_name}' from YAML.")
-        await notification_queue.put((f"Prompts for {char_name} loaded from YAML and stored.", 'positive'))
-        return
-
-    existing_prompts = chat_manager.db.get_character_prompts(chat_manager.session_id, char_name)
-    if existing_prompts:
-        logger.info(f"Specific prompts for '{char_name}' already exist in the database. Skipping generation.")
-        return
-
-    # Proceed to generate prompts via LLM
-    guidelines_path = os.path.join("src", "multipersona_chat_app", "config", "morality_guidelines.yaml")
-    try:
-        with open(guidelines_path, 'r') as f:
-            mg_data = yaml.safe_load(f)
-            moral_guidelines = mg_data.get("morality_guidelines", "")
-    except Exception as e:
-        logger.error(f"Error loading moral guidelines: {e}")
-        moral_guidelines = ""
-
-    char_instance = chat_manager.characters[char_name]
-
-    prompt_for_llm = CHARACTER_PROMPT_GENERATION_TEMPLATE.format(
-        character_name=char_instance.name,
-        character_description=char_instance.character_description,
-        appearance=char_instance.appearance,
-        moral_guidelines=moral_guidelines
-    )
-
-    prompt_generation_client = OllamaClient(
-        'src/multipersona_chat_app/config/llm_config.yaml',
-        output_model=CharacterPromptGenOutput
-    )
-
-    llm_busy = True
-    llm_status_label.text = f"Generating specific prompts for {char_name}..."
-    llm_status_label.visible = True
-    llm_status_label.update()
-
-    async with llm_lock:
-        try:
-            response: CharacterPromptGenOutput = await run.io_bound(
-                prompt_generation_client.generate,
-                prompt=prompt_for_llm
-            )
-            if response:
-                chat_manager.db.save_character_prompts(
-                    chat_manager.session_id,
-                    char_name,
-                    response.character_system_prompt,
-                    response.dynamic_prompt_template
-                )
-                logger.info(f"Successfully stored character_system_prompt & dynamic_prompt_template for character '{char_name}'.")
-                await notification_queue.put((f"New prompts for {char_name} have been generated and stored.", 'positive'))
-            else:
-                logger.warning(f"No response or invalid output from LLM for {char_name}.")
-                await notification_queue.put((f"Failed to generate prompts for {char_name}.", 'warning'))
-
-        except Exception as e:
-            logger.error(f"Error while generating character-specific prompts for {char_name}: {e}")
-            await notification_queue.put((f"Error: {e}", 'error'))
-        finally:
-            llm_busy = False
-            llm_status_label.text = ""
-            llm_status_label.visible = False
-            llm_status_label.update()
-
-    show_chat_display.refresh()
-    show_character_details.refresh()
-
 def main_page():
     global user_input, you_name_input, character_dropdown, added_characters_container
-    global next_speaker_label, next_button, settings_dropdown, session_dropdown, chat_display
+    global next_speaker_label, next_button, settings_dropdown, setting_description_label
+    global session_dropdown, chat_display
     global current_location_label, llm_status_label
-    global ALL_CHARACTERS, ALL_SETTINGS, character_locations_display, character_clothing_display
+    global ALL_CHARACTERS, ALL_SETTINGS, character_details_display
 
     logger.debug("Setting up main UI page.")
     ALL_CHARACTERS = get_available_characters(CHARACTERS_DIR)
@@ -681,7 +588,6 @@ def main_page():
 
             with ui.row().classes('w-full items-center mb-4'):
                 ui.label("Session:").classes('w-1/4')
-                global session_dropdown
                 session_dropdown = ui.select(
                     options=[s['name'] for s in chat_manager.db.get_all_sessions()],
                     label="Choose a session",
@@ -702,19 +608,22 @@ def main_page():
                     label="Choose a setting"
                 ).classes('flex-grow')
 
+            global setting_description_label
+            with ui.row().classes('w-full items-center mb-2'):
+                ui.label("Setting Description:").classes('w-1/4')
+                setting_description_label = ui.label("(Not set)").classes('flex-grow text-gray-700')
+
             with ui.row().classes('w-full items-center mb-2'):
                 ui.label("Session-Level Location:").classes('w-1/4')
                 current_location_label = ui.label(
                     chat_manager.current_location if chat_manager.current_location else "Not set."
                 ).classes('flex-grow text-gray-700')
 
-            global character_details_display
             character_details_display = ui.column().classes('mb-4')
             show_character_details()
 
             with ui.row().classes('w-full items-center mb-4'):
                 ui.label("Select Character:").classes('w-1/4')
-                global character_dropdown
                 character_dropdown = ui.select(
                     options=list(ALL_CHARACTERS.keys()),
                     on_change=lambda e: asyncio.create_task(add_character_from_dropdown(e)),
