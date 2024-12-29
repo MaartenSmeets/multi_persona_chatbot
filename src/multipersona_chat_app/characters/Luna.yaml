@@ -68,13 +68,16 @@ dynamic_prompt_template: |
   CURRENT CONTEXT:
   - Setting: {setting}
   - Recent History: {chat_history_summary}
-  - ### Latest Dialogue Line: {latest_dialogue}
+  - Latest Dialogue: {latest_dialogue}
   - Current Appearance: {current_appearance}
   - Current Location: {current_location}
 
+  PLAN
+  {character_plan}
+
   INTERACTION GUIDELINES:
   - Respond primarily to the ### Latest Dialogue Line, referencing other context only as needed.
-  - Use the provided context to ensure Luna's actions and dialogue progress the story and avoid repetition or stagnation
+  - Use the provided context to ensure Maika's actions and dialogue progress the story and avoid repetition or stagnation.
   - Look at Luna's previous interaction to make sure you are not repeating the same or similar actions or dialogue.
   - Use details from Luna’s current setting to enhance her dreamy responses and inform her actions.
   - Reflect Luna’s relationships and ongoing narrative threads by considering the chat history in her responses.

@@ -1,6 +1,8 @@
 import sqlite3
 import logging
 from typing import List, Dict, Any, Optional
+from datetime import datetime
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +44,7 @@ class DBManager:
             )
         ''')
 
-        # Create messages table (with columns for all "why_*" plus new_location/new_appearance)
+        # Create messages table (with columns for why_*, new_location, new_appearance)
         c.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -112,7 +114,7 @@ class DBManager:
             )
         ''')
 
-        # Create or alter session_characters table to include current_appearance
+        # Create session_characters table (and ensure current_appearance column)
         c.execute('''
             CREATE TABLE IF NOT EXISTS session_characters (
                 session_id TEXT NOT NULL,
@@ -129,7 +131,7 @@ class DBManager:
         except sqlite3.OperationalError:
             logger.debug("Column 'current_appearance' already exists in 'session_characters' table. Skipping.")
 
-        # Create appearance_history table for storing chronological appearance changes
+        # Create appearance_history table
         c.execute('''
             CREATE TABLE IF NOT EXISTS appearance_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -143,7 +145,7 @@ class DBManager:
             )
         ''')
 
-        # Create character_prompts table WITH character_system_prompt
+        # Create character_prompts table
         c.execute('''
             CREATE TABLE IF NOT EXISTS character_prompts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -156,12 +158,27 @@ class DBManager:
             )
         ''')
 
+        #
+        # NEW TABLE for Character Plans (goal & steps)
+        #
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS character_plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                character_name TEXT NOT NULL,
+                goal TEXT,
+                steps TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(session_id) REFERENCES sessions(session_id),
+                UNIQUE(session_id, character_name)
+            )
+        ''')
+
         conn.commit()
         conn.close()
-        logger.info("Database initialized with required tables (character_system_prompt and dynamic_prompt_template added).")
+        logger.info("Database initialized with required tables (including character_plans).")
 
     # Session Management
-
     def create_session(self, session_id: str, name: str):
         conn = self._ensure_connection()
         c = conn.cursor()
@@ -183,6 +200,7 @@ class DBManager:
         c.execute('DELETE FROM session_characters WHERE session_id = ?', (session_id,))
         c.execute('DELETE FROM character_prompts WHERE session_id = ?', (session_id,))
         c.execute('DELETE FROM appearance_history WHERE session_id = ?', (session_id,))
+        c.execute('DELETE FROM character_plans WHERE session_id = ?', (session_id,))
         conn.commit()
         conn.close()
         logger.info(f"Session with ID '{session_id}' and all associated data deleted.")
@@ -352,7 +370,7 @@ class DBManager:
         updated_location = merge_location_update(old_location, new_location)
 
         if updated_location == old_location:
-            logger.debug(f"No location change for character '{character_name}' in session '{session_id}'. Skipping update.")
+            logger.debug(f"No location change for character '{character_name}' in session '{session_id}'.")
             return False  # No update needed
 
         conn = self._ensure_connection()
@@ -385,7 +403,7 @@ class DBManager:
         updated_appearance = merge_appearance_update(old_appearance, new_appearance)
 
         if updated_appearance == old_appearance:
-            logger.debug(f"No appearance change for character '{character_name}' in session '{session_id}'. Skipping update.")
+            logger.debug(f"No appearance change for character '{character_name}' in session '{session_id}'.")
             return False  # No update needed
 
         conn = self._ensure_connection()
@@ -423,16 +441,16 @@ class DBManager:
                      message: str,
                      visible: bool = True,
                      message_type: str = "user",
-                     affect: Optional[str]=None,
-                     purpose: Optional[str]=None,
-                     why_purpose: Optional[str]=None,
-                     why_affect: Optional[str]=None,
-                     why_action: Optional[str]=None,
-                     why_dialogue: Optional[str]=None,
-                     why_new_location: Optional[str]=None,
-                     why_new_appearance: Optional[str]=None,
-                     new_location: Optional[str]=None,
-                     new_appearance: Optional[str]=None) -> int:
+                     affect: Optional[str] = None,
+                     purpose: Optional[str] = None,
+                     why_purpose: Optional[str] = None,
+                     why_affect: Optional[str] = None,
+                     why_action: Optional[str] = None,
+                     why_dialogue: Optional[str] = None,
+                     why_new_location: Optional[str] = None,
+                     why_new_appearance: Optional[str] = None,
+                     new_location: Optional[str] = None,
+                     new_appearance: Optional[str] = None) -> int:
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
@@ -521,7 +539,7 @@ class DBManager:
             f"up to message ID {covered_up_to_message_id}."
         )
 
-    def get_all_summaries(self, session_id: str, character_name: str) -> List[str]:
+    def get_all_summaries(self, session_id: str, character_name: Optional[str]) -> List[str]:
         conn = self._ensure_connection()
         c = conn.cursor()
         if character_name:
@@ -594,3 +612,50 @@ class DBManager:
         conn.commit()
         conn.close()
         logger.info(f"Stored character_system_prompt and dynamic_prompt_template for character '{character_name}' in session '{session_id}'.")
+
+    #
+    # UPDATED: Character Plans (goal + steps as a list)
+    #
+    def get_character_plan(self, session_id: str, character_name: str) -> Optional[Dict[str, Any]]:
+        conn = self._ensure_connection()
+        c = conn.cursor()
+        c.execute('''
+            SELECT goal, steps, updated_at
+            FROM character_plans
+            WHERE session_id = ? AND character_name = ?
+        ''', (session_id, character_name))
+        row = c.fetchone()
+        conn.close()
+        if row:
+            goal_str = row[0] or ""
+            steps_str = row[1] or ""
+            updated_at = row[2]
+            steps_list = []
+            if steps_str:
+                try:
+                    steps_list = json.loads(steps_str)
+                except json.JSONDecodeError:
+                    logger.warning(f"Could not parse steps as JSON: {steps_str}")
+            return {
+                'goal': goal_str,
+                'steps': steps_list,
+                'updated_at': updated_at
+            }
+        return None
+
+    def save_character_plan(self, session_id: str, character_name: str, goal: str, steps: List[str]):
+        # Serialize the steps list as JSON
+        steps_str = json.dumps(steps)
+        conn = self._ensure_connection()
+        c = conn.cursor()
+        c.execute('''
+            INSERT INTO character_plans (session_id, character_name, goal, steps)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(session_id, character_name)
+            DO UPDATE SET goal=excluded.goal,
+                          steps=excluded.steps,
+                          updated_at=CURRENT_TIMESTAMP
+        ''', (session_id, character_name, goal, steps_str))
+        conn.commit()
+        conn.close()
+        logger.info(f"Saved character plan for '{character_name}' in session '{session_id}': goal={goal}, steps={steps}")

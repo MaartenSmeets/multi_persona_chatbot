@@ -1,5 +1,3 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/chats/chat_manager.py
-
 import os
 import logging
 from typing import List, Dict, Tuple, Optional
@@ -13,7 +11,7 @@ from templates import (
     CHARACTER_INTRODUCTION_SYSTEM_PROMPT_TEMPLATE
 )
 from models.interaction import Interaction
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import json
 
 logger = logging.getLogger(__name__)
@@ -22,10 +20,22 @@ class InteractionValidationOutput(BaseModel):
     """
     A structured output to check if the interaction is valid according to
     the character's system prompt and dynamic prompt template. If not valid,
-    we receive a corrected version to try again or to store if within iteration count.
+    we receive a corrected version.
     """
     is_valid: str
     corrected_interaction: Optional[Interaction] = None
+
+
+#
+# UPDATED Pydantic Model for Character Plans
+#
+from typing import List
+
+class CharacterPlan(BaseModel):
+    goal: str = ""
+    # Changed to a true list:
+    steps: List[str] = []
+
 
 class ChatManager:
     def __init__(self, you_name: str = "You", session_id: Optional[str] = None, settings: List[Dict] = []):
@@ -39,7 +49,7 @@ class ChatManager:
         config_path = os.path.join("src", "multipersona_chat_app", "config", "chat_manager_config.yaml")
         self.config = self.load_config(config_path)
 
-        # Added retrieval of validation_loop config
+        # Summarization config
         self.summarization_threshold = self.config.get('summarization_threshold', 20)
         self.recent_dialogue_lines = self.config.get('recent_dialogue_lines', 5)
         self.to_summarize_count = self.summarization_threshold - self.recent_dialogue_lines
@@ -132,10 +142,7 @@ class ChatManager:
             initial_location=current_session_loc,
             initial_appearance=char_instance.appearance
         )
-        
-        ###############################################################################
-        # NEW FIX: Store the prompts in the DB if they exist in the character's YAML. #
-        ###############################################################################
+
         if char_instance.character_system_prompt and char_instance.dynamic_prompt_template:
             self.db.save_character_prompts(
                 self.session_id,
@@ -147,10 +154,39 @@ class ChatManager:
         else:
             logger.warning(f"No system/dynamic prompts found in YAML for '{char_name}'.")
 
+        # Ensure we have a plan for this character
+        self.ensure_character_plan_exists(char_name)
+
     def remove_character(self, char_name: str):
         if char_name in self.characters:
             del self.characters[char_name]
         self.db.remove_character_from_session(self.session_id, char_name)
+
+    def ensure_character_plan_exists(self, char_name: str):
+        """
+        Check if character plan is present in DB; if not, create an initial plan based on
+        the character's description. This is done once per character per session.
+        """
+        plan_data = self.db.get_character_plan(self.session_id, char_name)
+        if plan_data is None:
+            # We create a default initial plan
+            default_goal = f"Establish a new personal goal for {char_name} based on their personality."
+            # Steps as an empty list
+            default_steps = []
+            self.db.save_character_plan(self.session_id, char_name, default_goal, default_steps)
+            logger.info(f"No existing plan for '{char_name}'. Created default plan.")
+        else:
+            logger.debug(f"Plan for '{char_name}' already exists in DB. Goal: {plan_data['goal']}")
+
+    def get_character_plan(self, char_name: str) -> CharacterPlan:
+        plan_data = self.db.get_character_plan(self.session_id, char_name)
+        if plan_data:
+            return CharacterPlan(goal=plan_data['goal'] or "", steps=plan_data['steps'] or [])
+        else:
+            return CharacterPlan()  # default empty if not found
+
+    def save_character_plan(self, char_name: str, plan: CharacterPlan):
+        self.db.save_character_plan(self.session_id, char_name, plan.goal, plan.steps)
 
     def next_speaker(self) -> Optional[str]:
         chars = self.get_character_names()
@@ -209,9 +245,13 @@ class ChatManager:
         return history
 
     def build_prompt_for_character(self, character_name: str) -> Tuple[str, str]:
+        """
+        Builds the system prompt & dynamic prompt for the LLM using stored prompts,
+        plus the newly introduced plan placeholder {character_plan}.
+        """
         existing_prompts = self.db.get_character_prompts(self.session_id, character_name)
         if not existing_prompts:
-            raise ValueError(f"Existing prompts not found in the session for '{character_name}'. They must be in the YAML.")
+            raise ValueError(f"Existing prompts not found in the session for '{character_name}'.")
 
         system_prompt = existing_prompts['character_system_prompt']
         dynamic_prompt_template = existing_prompts['dynamic_prompt_template']
@@ -244,6 +284,14 @@ class ChatManager:
         location = self.get_combined_location()
         current_appearance = self.db.get_character_appearance(self.session_id, character_name)
 
+        #
+        # Use the existing plan in a more structured way:
+        #
+        plan_obj = self.get_character_plan(character_name)
+        # Convert steps into a simple bullet or JSON-like list for display in the prompt
+        steps_text = "\n".join(f"- {s}" for s in plan_obj.steps)
+        plan_text = f"Goal: {plan_obj.goal}\nSteps:\n{steps_text}"
+
         try:
             formatted_prompt = dynamic_prompt_template
             formatted_prompt = formatted_prompt.replace("{setting}", setting_description)
@@ -251,6 +299,7 @@ class ChatManager:
             formatted_prompt = formatted_prompt.replace("{latest_dialogue}", latest_dialogue)
             formatted_prompt = formatted_prompt.replace("{current_location}", location)
             formatted_prompt = formatted_prompt.replace("{current_appearance}", current_appearance)
+            formatted_prompt = formatted_prompt.replace("{character_plan}", plan_text)
         except Exception as e:
             logger.error(f"Error replacing placeholders in dynamic_prompt_template: {e}")
             raise
@@ -288,8 +337,8 @@ class ChatManager:
         user_prompt = INTRODUCTION_TEMPLATE.format(
             name=character_name,
             character_name=character_name,
-            appearance=self.characters[character_name].appearance,
-            character_description=self.characters[character_name].character_description,
+            appearance=char.appearance,
+            character_description=char.character_description,
             setting=setting_description,
             location=session_loc,
             chat_history_summary=chat_history_summary,
@@ -444,8 +493,6 @@ Now produce a short summary from {character_name}'s viewpoint.
         )
         if updated:
             logger.info(f"Character '{character_name}' moved/updated location to '{new_location}'.")
-        else:
-            logger.debug(f"No location update needed for '{character_name}'.")
 
     async def handle_new_appearance_for_character(self, character_name: str, new_appearance: str, triggered_message_id: int):
         updated = self.db.update_character_appearance(
@@ -456,8 +503,6 @@ Now produce a short summary from {character_name}'s viewpoint.
         )
         if updated:
             logger.info(f"Character '{character_name}' updated appearance to '{new_appearance}'.")
-        else:
-            logger.debug(f"No appearance update needed for '{character_name}'.")
 
     def get_all_visible_messages(self) -> List[Dict]:
         summaries = self.db.get_all_summaries(self.session_id, None)
@@ -475,11 +520,8 @@ Now produce a short summary from {character_name}'s viewpoint.
     ) -> Optional[Interaction]:
         """
         Validates (and if needed corrects) the given interaction to ensure
-        it conforms to character_system_prompt and dynamic_prompt_template.
-        Returns a valid Interaction or None if it cannot be validated in the allowed iterations.
+        it conforms to prompts. Returns a valid Interaction or None if it cannot be validated.
         """
-
-        # If validation_loop_setting == 0 => skip validation and store as-is
         if self.validation_loop_setting == 0:
             return initial_interaction
 
@@ -524,7 +566,7 @@ Please reply in valid JSON format with the following fields:
       "why_new_appearance": "..."
   }}
 }}
-- If is_valid is "yes", do NOT provide a corrected_interaction (or leave it empty if you must).
+- If is_valid is "yes", do NOT provide a corrected_interaction (or leave it empty).
 - If is_valid is "no", provide a corrected_interaction with valid fields.
 
 Only produce valid JSON with these two top-level keys: "is_valid" and "corrected_interaction". 
@@ -560,6 +602,7 @@ Include all fields in "corrected_interaction" if is_valid="no".
 
             if validation_output.is_valid.lower() == "yes":
                 logger.debug(f"Interaction is valid on iteration {iteration}.")
+                await self.update_character_plan(character_name)
                 return current_interaction
 
             corrected = validation_output.corrected_interaction
@@ -576,7 +619,62 @@ Include all fields in "corrected_interaction" if is_valid="no".
             if self.validation_loop_setting > 0 and iteration >= self.validation_loop_setting:
                 logger.warning("Reached validation iteration limit without achieving 'is_valid=yes'.")
                 return None
-            # If -1, continue infinitely until "yes".
         
-        # Shouldn't get here
+        # Not reached normally
         return None
+
+    #
+    # UPDATED: Let LLM revise or create the plan for the character if needed
+    #
+    async def update_character_plan(self, character_name: str):
+        """
+        Calls the LLM to revise or confirm the existing plan for the given character
+        based on the latest context. If the plan changes, we store it.
+        """
+        plan_client = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml', output_model=CharacterPlan)
+
+        existing_plan = self.get_character_plan(character_name)
+        plan_prompt = f"""
+You are helping to maintain a longer-term plan for {character_name}.
+Here is the character's current plan (goal + steps) and context:
+Goal: {existing_plan.goal}
+Steps: {existing_plan.steps}
+
+CONTEXT
+- Current setting: {self.current_setting}
+- Current location: {self.get_combined_location()}
+
+LATEST DIALOGUE
+{"\\n".join(m["message"] for m in self.get_visible_history() if isinstance(m, dict))}
+
+INSTRUCTION
+The character's situation or plans might have changed. Make sure the steps to reach goal align with the context and latest events.
+If needed, revise the plan:
+- The "goal" might change or remain the same.
+- The "steps" is a list of strings; add, remove, or modify them as needed.
+- They should logically connect to the new events in the story.
+
+Output strictly in JSON, matching this structure:
+{{
+  "goal": "<string>",
+  "steps": [ "step1", "step2", ... ]
+}}
+If nothing should change, just repeat the current plan.
+"""
+
+        plan_result = plan_client.generate(prompt=plan_prompt, use_cache=False)
+        if not plan_result:
+            logger.warning("Plan update returned no result. Keeping existing plan.")
+            return
+
+        try:
+            # Because output_model=CharacterPlan, plan_result might already be a CharacterPlan object:
+            if isinstance(plan_result, CharacterPlan):
+                new_plan = plan_result
+            else:
+                new_plan = CharacterPlan.model_validate_json(plan_result)
+
+            self.save_character_plan(character_name, new_plan)
+            logger.info(f"Plan updated for '{character_name}'. New goal: {new_plan.goal}, steps: {new_plan.steps}")
+        except Exception as e:
+            logger.error(f"Failed to parse new plan data. Keeping old plan. Error: {e}")

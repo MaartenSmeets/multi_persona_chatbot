@@ -35,18 +35,7 @@ session_dropdown = None
 chat_display = None
 auto_timer = None
 current_location_label = None
-
-llm_status_label = None  # Status label for LLM
-
-# Added asyncio.Lock to manage LLM concurrency
-llm_lock = asyncio.Lock()
-
-CHARACTERS_DIR = "src/multipersona_chat_app/characters"
-ALL_CHARACTERS = {}
-ALL_SETTINGS = []
-
-introductions_given = {}
-llm_busy = False
+llm_status_label = None
 
 # A queue for user notifications
 notification_queue = asyncio.Queue()
@@ -107,23 +96,33 @@ def show_character_details():
         else:
             with character_details_display:
                 for c_name in char_names:
-                    # Create a card for each character
                     with ui.card().classes('w-full mb-4 p-4 bg-gray-50'):
                         ui.label(c_name).classes('text-lg font-bold mb-2 text-blue-600')
                         
-                        # Location information
                         loc = chat_manager.db.get_character_location(chat_manager.session_id, c_name)
                         with ui.row().classes('mb-2'):
                             ui.icon('location_on').classes('text-gray-600 mr-2')
                             ui.label(f"Location: {loc if loc.strip() else '(Unknown location)'}"
                                    ).classes('text-sm text-gray-700')
                         
-                        # Appearance information
                         appearance = chat_manager.db.get_character_appearance(chat_manager.session_id, c_name)
-                        with ui.row():
+                        with ui.row().classes('mb-2'):
                             ui.icon('checkroom').classes('text-gray-600 mr-2')
                             ui.label(f"Appearance: {appearance if appearance.strip() else '(Unknown appearance)'}"
                                    ).classes('text-sm text-gray-700')
+
+                        # NEW: Display character's longer-term plan (goal + steps)
+                        plan_data = chat_manager.db.get_character_plan(chat_manager.session_id, c_name)
+                        if plan_data:
+                            with ui.row().classes('mt-2'):
+                                ui.icon('flag').classes('text-gray-600 mr-2')
+                                ui.label(f"Goal: {plan_data['goal']}")
+                            with ui.row().classes('mb-2'):
+                                ui.icon('list').classes('text-gray-600 mr-2')
+                                ui.label(f"Steps: {plan_data['steps']}")
+                        else:
+                            with ui.row().classes('mb-2'):
+                                ui.label("No plan found (it may be generated soon).")
     else:
         logger.error("character_details_display is not initialized.")
 
@@ -227,9 +226,8 @@ def load_session(session_id: str):
     logger.debug(f"Loading session with ID: {session_id}")
     chat_manager.session_id = session_id
     chat_manager.characters = {}
-    introductions_given.clear()
 
-    # Handle setting
+    # Re-set or load setting
     current_setting_name = chat_manager.db.get_current_setting(session_id)
     setting = next((s for s in ALL_SETTINGS if s['name'] == current_setting_name), None)
     if setting:
@@ -253,12 +251,11 @@ def load_session(session_id: str):
         else:
             logger.error("No setting found and 'Intimate Setting' not available.")
 
-    # Re-add session characters from DB (already have system/dynamic prompts stored from YAML)
+    # Re-add session characters from DB
     session_chars = chat_manager.db.get_session_characters(session_id)
     for c_name in session_chars:
         if c_name in ALL_CHARACTERS:
             chat_manager.add_character(c_name, ALL_CHARACTERS[c_name])
-            introductions_given[c_name] = False
         else:
             logger.warning(f"Character '{c_name}' found in DB but not in ALL_CHARACTERS.")
 
@@ -380,9 +377,6 @@ async def generate_character_introduction_message(character_name: str):
         logger.info(f"Building introduction prompts for character: {character_name}")
         system_prompt, introduction_prompt = chat_manager.build_introduction_prompts_for_character(character_name)
 
-        logger.debug(f"System prompt for {character_name}: {system_prompt}")
-        logger.debug(f"Introduction prompt for {character_name}: {introduction_prompt}")
-
         introduction_response = await run.io_bound(
             introduction_llm_client.generate,
             prompt=introduction_prompt,
@@ -405,12 +399,9 @@ async def generate_character_introduction_message(character_name: str):
 
             if appearance:
                 await chat_manager.handle_new_appearance_for_character(character_name, appearance, msg_id)
-
             if location:
                 await chat_manager.handle_new_location_for_character(character_name, location, msg_id)
 
-            introductions_given[character_name] = True
-            logger.info(f"Introduction for {character_name} stored successfully.")
         else:
             logger.warning(f"Invalid response received for introduction of {character_name}. Response: {introduction_response}")
 
@@ -434,57 +425,53 @@ async def generate_character_message(character_name: str):
     llm_status_label.visible = True
     llm_status_label.update()
 
-    # Retrieve existing prompts from DB (they come from the YAML file)
     prompts = chat_manager.db.get_character_prompts(chat_manager.session_id, character_name)
     if not prompts:
-        logger.error(f"No system/dynamic prompts found in the DB for '{character_name}'. They must be in the YAML.")
+        logger.error(f"No system/dynamic prompts found in the DB for '{character_name}'. Check YAML.")
         await notification_queue.put((f"Missing prompts for {character_name}. Check YAML!", 'error'))
         llm_busy = False
         llm_status_label.text = ""
         llm_status_label.visible = False
         llm_status_label.update()
         return
-        
+
     char_spoken_before = any(
         m for m in chat_manager.db.get_messages(chat_manager.session_id)
         if m["sender"] == character_name and m["message_type"] == "character"
     )
 
-    if character_name not in introductions_given:
-        introductions_given[character_name] = False
-
-    # If the character hasn't introduced themselves yet, do that first
-    if not introductions_given[character_name] and not char_spoken_before:
+    # If character hasn't introduced themselves yet, do that first
+    if not char_spoken_before:
         await generate_character_introduction_message(character_name)
+        llm_busy = False
+        llm_status_label.text = ""
+        llm_status_label.visible = False
+        llm_status_label.update()
         return
 
     try:
-        # Call build_prompt_for_character to get the formatted prompt
         system_prompt, formatted_prompt = chat_manager.build_prompt_for_character(character_name)
 
-        # IMPORTANT: use_cache=False to force a fresh LLM response each time
         interaction = await run.io_bound(
             llm_client.generate,
-            prompt=formatted_prompt,  # Use the formatted prompt with placeholders replaced
+            prompt=formatted_prompt,
             system=system_prompt,
-            use_cache=False  # Force new response to avoid repetitive loops
+            use_cache=False
         )
 
         if not interaction:
             logger.warning(f"No response for {character_name}. Not storing.")
         else:
-            # Let chat_manager handle validation; only store if valid
             validated = await chat_manager.validate_and_possibly_correct_interaction(
                 character_name, system_prompt, formatted_prompt, interaction
             )
             if validated:
-                # We now have a valid Interaction
                 final_interaction = validated
                 formatted_message = f"*{final_interaction.action}*\n{final_interaction.dialogue}"
                 msg_id = chat_manager.add_message(
                     character_name,
                     formatted_message,
-                    visible=True,  # Now we can show it
+                    visible=True,
                     message_type="character",
                     affect=final_interaction.affect,
                     purpose=final_interaction.purpose,
@@ -546,7 +533,6 @@ async def add_character_from_dropdown(event):
         if char_name not in chat_manager.get_character_names():
             chat_manager.add_character(char_name, char)
             chat_manager.db.add_character_to_session(chat_manager.session_id, char_name)
-            introductions_given[char_name] = False
             refresh_added_characters()
             logger.info(f"Character '{char_name}' added to chat.")
             show_chat_display.refresh()
@@ -564,8 +550,6 @@ async def remove_character_async(name: str):
     logger.info(f"Removing character: {name}")
     chat_manager.remove_character(name)
     chat_manager.db.remove_character_from_session(chat_manager.session_id, name)
-    if name in introductions_given:
-        del introductions_given[name]
     refresh_added_characters()
     show_chat_display.refresh()
     show_character_details.refresh()
@@ -579,7 +563,7 @@ def main_page():
     global ALL_CHARACTERS, ALL_SETTINGS, character_details_display
 
     logger.debug("Setting up main UI page.")
-    ALL_CHARACTERS = get_available_characters(CHARACTERS_DIR)
+    ALL_CHARACTERS = get_available_characters("src/multipersona_chat_app/characters")
     ALL_SETTINGS = load_settings()
 
     with ui.grid(columns=2).style('grid-template-columns: 1fr 2fr; height: 100vh;'):
@@ -608,7 +592,6 @@ def main_page():
                     label="Choose a setting"
                 ).classes('flex-grow')
 
-            global setting_description_label
             with ui.row().classes('w-full items-center mb-2'):
                 ui.label("Setting Description:").classes('w-1/4')
                 setting_description_label = ui.label("(Not set)").classes('flex-grow text-gray-700')
@@ -619,6 +602,7 @@ def main_page():
                     chat_manager.current_location if chat_manager.current_location else "Not set."
                 ).classes('flex-grow text-gray-700')
 
+            global character_details_display
             character_details_display = ui.column().classes('mb-4')
             show_character_details()
 
@@ -670,12 +654,10 @@ def main_page():
 
     logger.debug("Main UI page setup complete.")
 
-    # Timer for automatic conversation (Async)
     global auto_timer
     auto_timer = ui.timer(interval=2.0, callback=lambda: asyncio.create_task(automatic_conversation()), active=False)
     logger.info("UI timer for automatic conversation set up.")
 
-    # Timer to handle notifications
     ui.timer(1.0, consume_notifications, active=True)
 
 def start_ui():
@@ -707,12 +689,10 @@ def start_ui():
         logger.info(f"Loading existing session: {first_session['name']} with ID: {first_session['session_id']}")
         load_session(first_session['session_id'])
 
-    # Timer for automatic conversation (Async)
     global auto_timer
     auto_timer = ui.timer(interval=2.0, callback=lambda: asyncio.create_task(automatic_conversation()), active=False)
     logger.info("UI timer for automatic conversation set up.")
 
-    # Timer to handle notifications
     ui.timer(1.0, consume_notifications, active=True)
 
     ui.run(reload=False)

@@ -68,6 +68,9 @@ dynamic_prompt_template: |
     Last Interaction: {latest_dialogue}
     Current appearance: {current_appearance}
     Current Location: {current_location}
+    
+    PLAN
+    {character_plan}
 
     INTERACTION GUIDELINES:
     - Respond primarily to the ### Latest Dialogue Line, using other context only as needed.

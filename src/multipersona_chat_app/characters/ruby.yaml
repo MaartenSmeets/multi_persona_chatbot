@@ -76,6 +76,9 @@ dynamic_prompt_template: |
   - Current Appearance: {current_appearance}
   - Current Location: {current_location}
 
+  PLAN
+  {character_plan}
+
   INTERACTION GUIDELINES:
   - Respond primarily to the ### Latest Dialogue Line, referencing other context only as needed.
   - Use the provided context to ensure Ruby's actions and dialogue progress the story and avoid repetition or stagnation
