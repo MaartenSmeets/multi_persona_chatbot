@@ -1,4 +1,5 @@
 # File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/chats/chat_manager.py
+
 import os
 import logging
 from typing import List, Dict, Tuple, Optional
@@ -14,6 +15,8 @@ from templates import (
 from models.interaction import Interaction
 from pydantic import BaseModel, Field
 import json
+
+import asyncio  # <-- added for async background calls
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +37,6 @@ from typing import List
 
 class CharacterPlan(BaseModel):
     goal: str = ""
-    # Changed to a true list:
     steps: List[str] = []
 
 
@@ -155,7 +157,7 @@ class ChatManager:
         else:
             logger.warning(f"No system/dynamic prompts found in YAML for '{char_name}'.")
 
-        # Ensure we do NOT assign a default plan.
+        # Ensure we do NOT assign a default plan; only create if it exists
         self.ensure_character_plan_exists(char_name)
 
     def remove_character(self, char_name: str):
@@ -165,7 +167,7 @@ class ChatManager:
 
     def ensure_character_plan_exists(self, char_name: str):
         """
-        Check if character plan is present in DB; if not, do nothing (no default).
+        Check if character plan is present in DB; if not, do nothing.
         """
         plan_data = self.db.get_character_plan(self.session_id, char_name)
         if plan_data is None:
@@ -178,7 +180,7 @@ class ChatManager:
         if plan_data:
             return CharacterPlan(goal=plan_data['goal'] or "", steps=plan_data['steps'] or [])
         else:
-            return CharacterPlan()  # remains empty if not found
+            return CharacterPlan()
 
     def save_character_plan(self, char_name: str, plan: CharacterPlan):
         self.db.save_character_plan(self.session_id, char_name, plan.goal, plan.steps)
@@ -194,23 +196,28 @@ class ChatManager:
         if chars:
             self.turn_index = (self.turn_index + 1) % len(chars)
 
-    def add_message(self,
-                    sender: str,
-                    message: str,
-                    visible: bool = True,
-                    message_type: str = "user",
-                    affect: Optional[str] = None,
-                    purpose: Optional[str] = None,
-                    why_purpose: Optional[str] = None,
-                    why_affect: Optional[str] = None,
-                    why_action: Optional[str] = None,
-                    why_dialogue: Optional[str] = None,
-                    why_new_location: Optional[str] = None,
-                    why_new_appearance: Optional[str] = None,
-                    new_location: Optional[str] = None,
-                    new_appearance: Optional[str] = None) -> Optional[int]:
+    #
+    # CHANGE: 'add_message' is now async to avoid blocking when we do summarization.
+    #
+    async def add_message(self,
+                          sender: str,
+                          message: str,
+                          visible: bool = True,
+                          message_type: str = "user",
+                          affect: Optional[str] = None,
+                          purpose: Optional[str] = None,
+                          why_purpose: Optional[str] = None,
+                          why_affect: Optional[str] = None,
+                          why_action: Optional[str] = None,
+                          why_dialogue: Optional[str] = None,
+                          why_new_location: Optional[str] = None,
+                          why_new_appearance: Optional[str] = None,
+                          new_location: Optional[str] = None,
+                          new_appearance: Optional[str] = None) -> Optional[int]:
+
         if message_type == "system" or message.strip() == "...":
             return None
+
         message_id = self.db.save_message(
             self.session_id,
             sender,
@@ -228,7 +235,10 @@ class ChatManager:
             new_location,
             new_appearance
         )
-        self.check_summarization()
+
+        # Kick off summarization in the background
+        await self.check_summarization()
+
         return message_id
 
     def get_visible_history(self):
@@ -240,10 +250,6 @@ class ChatManager:
         return history
 
     def build_prompt_for_character(self, character_name: str) -> Tuple[str, str]:
-        """
-        Builds the system prompt & dynamic prompt for the LLM using stored prompts,
-        plus the newly introduced plan placeholder {character_plan}.
-        """
         existing_prompts = self.db.get_character_prompts(self.session_id, character_name)
         if not existing_prompts:
             raise ValueError(f"Existing prompts not found in the session for '{character_name}'.")
@@ -279,9 +285,7 @@ class ChatManager:
         location = self.get_combined_location()
         current_appearance = self.db.get_character_appearance(self.session_id, character_name)
 
-        #
-        # Use the existing plan in a more structured way:
-        #
+        # Insert the existing plan
         plan_obj = self.get_character_plan(character_name)
         steps_text = "\n".join(f"- {s}" for s in plan_obj.steps)
         plan_text = f"Goal: {plan_obj.goal}\nSteps:\n{steps_text}"
@@ -391,11 +395,17 @@ class ChatManager:
     def stop_automatic_chat(self):
         self.automatic_running = False
 
-    def check_summarization(self):
+    #
+    # CHANGE: 'check_summarization' is now async; it calls 'await' on summarize_history_for_character.
+    #
+    async def check_summarization(self):
         for char_name in self.characters:
-            self.summarize_history_for_character(char_name)
+            await self.summarize_history_for_character(char_name)
 
-    def summarize_history_for_character(self, character_name: str):
+    #
+    # CHANGE: 'summarize_history_for_character' is now async so we can run the LLM call in a background thread.
+    #
+    async def summarize_history_for_character(self, character_name: str):
         msgs = self.db.get_messages(self.session_id)
         last_covered_id = self.db.get_latest_covered_message_id(self.session_id, character_name)
         relevant_msgs = [
@@ -437,8 +447,10 @@ Now produce a short summary from {character_name}'s viewpoint.
 
         logger.debug(f"Summarization prompt for '{character_name}':\n{prompt}")
 
+        # Use background thread for LLM call
         summarize_llm = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml')
-        new_summary = summarize_llm.generate(prompt=prompt)
+        new_summary = await asyncio.to_thread(summarize_llm.generate, prompt=prompt)
+
         logger.debug(f"Summarization response for '{character_name}': {new_summary}")
 
         if not new_summary:
@@ -504,7 +516,7 @@ Now produce a short summary from {character_name}'s viewpoint.
         recent_msgs = visible_msgs[-self.recent_dialogue_lines:]
         history = summaries + [m for m in recent_msgs if m["visible"]]
         return history
-
+    
     async def validate_and_possibly_correct_interaction(
         self,
         character_name: str,
@@ -517,6 +529,8 @@ Now produce a short summary from {character_name}'s viewpoint.
         it conforms to prompts. Returns a valid Interaction or None if it cannot be validated.
         """
         if self.validation_loop_setting == 0:
+            # Even if we skip validation, still update plan
+            await self.update_character_plan(character_name)
             return initial_interaction
 
         validation_client = OllamaClient(
@@ -567,7 +581,9 @@ Only produce valid JSON with these two top-level keys: "is_valid" and "corrected
 Include all fields in "corrected_interaction" if is_valid="no".
 """
 
-            result = validation_client.generate(
+            # Call the LLM in a thread
+            result = await asyncio.to_thread(
+                validation_client.generate,
                 prompt=validation_prompt,
                 system=None,
                 use_cache=False
@@ -617,26 +633,23 @@ Include all fields in "corrected_interaction" if is_valid="no".
         # Not reached normally
         return None
 
+    #
+    # CHANGE: 'update_character_plan' calls the LLM in a separate thread so it won't block.
+    #
     async def update_character_plan(self, character_name: str):
         """
         Revise or confirm the existing plan for the given character based on the latest context.
         If the plan changes, store the new plan.
-
-        The plan consists of a goal and actionable, concrete steps starting from the character's current
-        location and appearance, leading to the achievement of the goal.
         """
-        # Initialize the LLM client with the appropriate configuration and output model
         plan_client = OllamaClient(
             config_path='src/multipersona_chat_app/config/llm_config.yaml',
             output_model=CharacterPlan
         )
 
-        # Retrieve existing plan and current appearance of the character
         existing_plan = self.get_character_plan(character_name)
         current_appearance = self.db.get_character_appearance(self.session_id, character_name)
         character_description = self.characters[character_name].character_description
 
-        # Define the system prompt to set the role and instructions for the LLM
         system_prompt = """
 You are an expert assistant in crafting and refining long-term plans for narrative characters. Your primary responsibility is to ensure that each character's plan is practical, achievable within hours or days, and tailored to their current context, including their location and appearance. Each plan consists of:
 
@@ -646,7 +659,6 @@ You are an expert assistant in crafting and refining long-term plans for narrati
 Your focus is to create plans that are logical, detailed, and aligned with the character’s circumstances.
         """
 
-        # Define the user prompt with specific details about the character and context
         user_prompt = f"""
 **Character Name:** {character_name}
 **Character description:** {character_description}
@@ -667,7 +679,7 @@ Your focus is to create plans that are logical, detailed, and aligned with the c
 **Instructions:**
 - Review the existing plan and the current context for {character_name}.
 - Determine if the plan needs to be revised based on any changes in {character_name}'s situation.
-- Ensure that the steps to reach the goal are actionable, concrete, sequential and start from the current location at setting and current appearance.
+- Ensure that the steps are actionable, concrete, sequential and start from the current location at setting and current appearance.
 - By the final step, the goal should be achieved.
 - If revisions are necessary:
     - The "goal" might change or remain the same.
@@ -693,35 +705,38 @@ Your focus is to create plans that are logical, detailed, and aligned with the c
 If no changes are needed, repeat the existing plan in the specified JSON format.
 """
 
-        # Generate the updated plan using the LLM
-        plan_result = plan_client.generate(prompt=user_prompt, system=system_prompt, use_cache=False)
+        # LLM call in a background thread
+        plan_result = await asyncio.to_thread(
+            plan_client.generate,
+            prompt=user_prompt,
+            system=system_prompt,
+            use_cache=False
+        )
 
-        # Handle the case where no result is returned
         if not plan_result:
             logger.warning("Plan update returned no result. Keeping existing plan.")
             return
 
         try:
-            # Parse the plan result into a CharacterPlan object
             if isinstance(plan_result, CharacterPlan):
                 new_plan: CharacterPlan = plan_result
             else:
                 new_plan = CharacterPlan.model_validate_json(plan_result)
 
-            # Save the new plan if it's different from the existing one
             self.save_character_plan(character_name, new_plan)
             logger.info(
                 f"Plan updated for '{character_name}'. "
                 f"New goal: {new_plan.goal}, steps: {new_plan.steps}"
             )
         except Exception as e:
-            # Log the error and retain the existing plan
             logger.error(
                 f"Failed to parse new plan data for '{character_name}'. "
                 f"Keeping old plan. Error: {e}"
             )
 
-
+    #
+    # We keep this async so the user can call it from app.py
+    #
     async def generate_character_introduction_message(self, character_name: str):
         """
         Generates the character's introduction and then triggers an initial plan update.
@@ -731,10 +746,11 @@ If no changes are needed, repeat the existing plan in the specified JSON format.
         introduction_llm_client = OllamaClient(
             'src/multipersona_chat_app/config/llm_config.yaml',
             output_model=None
-        )  # We'll parse manually
+        )
 
         try:
-            introduction_response = introduction_llm_client.generate(
+            introduction_response = await asyncio.to_thread(
+                introduction_llm_client.generate,
                 prompt=introduction_prompt,
                 system=system_prompt
             )
@@ -742,11 +758,8 @@ If no changes are needed, repeat the existing plan in the specified JSON format.
                 logger.warning(f"Empty introduction response for {character_name}.")
                 return
 
-            # In case the introduction is structured per CharacterIntroductionOutput:
-            # If you have an output model for intros, parse it. Otherwise just treat as text.
-            # For brevity here, assume it's plain text (the code can be extended to parse if needed).
             intro_text = introduction_response.strip()
-            msg_id = self.add_message(
+            msg_id = await self.add_message(
                 character_name,
                 intro_text,
                 visible=True,

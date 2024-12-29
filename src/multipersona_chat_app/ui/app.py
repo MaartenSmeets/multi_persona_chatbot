@@ -1,3 +1,5 @@
+# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/ui/app.py
+
 import os
 import uuid
 import asyncio
@@ -37,7 +39,6 @@ auto_timer = None
 current_location_label = None
 llm_status_label = None
 
-# A queue for user notifications
 notification_queue = asyncio.Queue()
 
 def consume_notifications():
@@ -111,7 +112,7 @@ def show_character_details():
                             ui.label(f"Appearance: {appearance if appearance.strip() else '(Unknown appearance)'}"
                                    ).classes('text-sm text-gray-700')
 
-                        # NEW: Display character's longer-term plan (goal + steps)
+                        # Show plan info
                         plan_data = chat_manager.db.get_character_plan(chat_manager.session_id, c_name)
                         if plan_data:
                             with ui.row().classes('mt-2'):
@@ -227,7 +228,6 @@ def load_session(session_id: str):
     chat_manager.session_id = session_id
     chat_manager.characters = {}
 
-    # Re-set or load setting
     current_setting_name = chat_manager.db.get_current_setting(session_id)
     setting = next((s for s in ALL_SETTINGS if s['name'] == current_setting_name), None)
     if setting:
@@ -251,7 +251,6 @@ def load_session(session_id: str):
         else:
             logger.error("No setting found and 'Intimate Setting' not available.")
 
-    # Re-add session characters from DB
     session_chars = chat_manager.db.get_session_characters(session_id)
     for c_name in session_chars:
         if c_name in ALL_CHARACTERS:
@@ -374,44 +373,15 @@ async def generate_character_introduction_message(character_name: str):
     llm_status_label.update()
 
     try:
-        logger.info(f"Building introduction prompts for character: {character_name}")
-        system_prompt, introduction_prompt = chat_manager.build_introduction_prompts_for_character(character_name)
-
-        introduction_response = await run.io_bound(
-            introduction_llm_client.generate,
-            prompt=introduction_prompt,
-            system=system_prompt
-        )
-
-        if isinstance(introduction_response, CharacterIntroductionOutput):
-            intro_text = introduction_response.introduction_text.strip()
-            appearance = introduction_response.current_appearance.strip()
-            location = introduction_response.current_location.strip()
-
-            logger.info(f"Introduction generated for {character_name}. Text: {intro_text}")
-
-            msg_id = chat_manager.add_message(
-                character_name,
-                intro_text,
-                visible=True,
-                message_type="character",
-            )
-
-            if appearance:
-                await chat_manager.handle_new_appearance_for_character(character_name, appearance, msg_id)
-            if location:
-                await chat_manager.handle_new_location_for_character(character_name, location, msg_id)
-
-        else:
-            logger.warning(f"Invalid response received for introduction of {character_name}. Response: {introduction_response}")
-
+        await chat_manager.generate_character_introduction_message(character_name)
     except Exception as e:
         logger.error(f"Error generating introduction for {character_name}: {e}", exc_info=True)
-    finally:
-        llm_busy = False
-        llm_status_label.text = ""
-        llm_status_label.visible = False
-        llm_status_label.update()
+        await notification_queue.put((f"Error generating introduction for {character_name}: {e}", 'error'))
+
+    llm_busy = False
+    llm_status_label.text = ""
+    llm_status_label.visible = False
+    llm_status_label.update()
 
     show_chat_display.refresh()
     show_character_details.refresh()
@@ -425,22 +395,11 @@ async def generate_character_message(character_name: str):
     llm_status_label.visible = True
     llm_status_label.update()
 
-    prompts = chat_manager.db.get_character_prompts(chat_manager.session_id, character_name)
-    if not prompts:
-        logger.error(f"No system/dynamic prompts found in the DB for '{character_name}'. Check YAML.")
-        await notification_queue.put((f"Missing prompts for {character_name}. Check YAML!", 'error'))
-        llm_busy = False
-        llm_status_label.text = ""
-        llm_status_label.visible = False
-        llm_status_label.update()
-        return
-
+    # If character hasn't introduced themselves yet, do that first
     char_spoken_before = any(
         m for m in chat_manager.db.get_messages(chat_manager.session_id)
         if m["sender"] == character_name and m["message_type"] == "character"
     )
-
-    # If character hasn't introduced themselves yet, do that first
     if not char_spoken_before:
         await generate_character_introduction_message(character_name)
         llm_busy = False
@@ -452,6 +411,7 @@ async def generate_character_message(character_name: str):
     try:
         system_prompt, formatted_prompt = chat_manager.build_prompt_for_character(character_name)
 
+        # Generate an Interaction from LLM (async background)
         interaction = await run.io_bound(
             llm_client.generate,
             prompt=formatted_prompt,
@@ -462,13 +422,14 @@ async def generate_character_message(character_name: str):
         if not interaction:
             logger.warning(f"No response for {character_name}. Not storing.")
         else:
+            # Validate & possibly correct the interaction
             validated = await chat_manager.validate_and_possibly_correct_interaction(
                 character_name, system_prompt, formatted_prompt, interaction
             )
             if validated:
                 final_interaction = validated
                 formatted_message = f"*{final_interaction.action}*\n{final_interaction.dialogue}"
-                msg_id = chat_manager.add_message(
+                msg_id = await chat_manager.add_message(
                     character_name,
                     formatted_message,
                     visible=True,
@@ -493,6 +454,7 @@ async def generate_character_message(character_name: str):
                 logger.warning(f"Interaction for {character_name} could not be validated or corrected. Not storing.")
     except Exception as e:
         logger.error(f"Error generating message for {character_name}: {e}")
+        await notification_queue.put((f"Error generating message for {character_name}: {e}", 'error'))
     finally:
         llm_busy = False
         llm_status_label.text = ""
@@ -509,7 +471,7 @@ async def send_user_message():
         return
 
     logger.info(f"User sent message: {message}")
-    chat_manager.add_message(
+    await chat_manager.add_message(
         chat_manager.you_name,
         message,
         visible=True,
@@ -602,7 +564,6 @@ def main_page():
                     chat_manager.current_location if chat_manager.current_location else "Not set."
                 ).classes('flex-grow text-gray-700')
 
-            global character_details_display
             character_details_display = ui.column().classes('mb-4')
             show_character_details()
 
