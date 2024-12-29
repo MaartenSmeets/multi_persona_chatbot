@@ -1,3 +1,4 @@
+# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/db/db_manager.py
 import sqlite3
 import logging
 from typing import List, Dict, Any, Optional
@@ -159,7 +160,7 @@ class DBManager:
         ''')
 
         #
-        # NEW TABLE for Character Plans (goal & steps)
+        # Character Plans (goal + steps)
         #
         c.execute('''
             CREATE TABLE IF NOT EXISTS character_plans (
@@ -174,9 +175,22 @@ class DBManager:
             )
         ''')
 
+        # NEW: History table for plan changes
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS character_plans_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                character_name TEXT NOT NULL,
+                goal TEXT,
+                steps TEXT,
+                changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(session_id) REFERENCES sessions(session_id)
+            )
+        ''')
+
         conn.commit()
         conn.close()
-        logger.info("Database initialized with required tables (including character_plans).")
+        logger.info("Database initialized with required tables (including character_plans and character_plans_history).")
 
     # Session Management
     def create_session(self, session_id: str, name: str):
@@ -201,6 +215,7 @@ class DBManager:
         c.execute('DELETE FROM character_prompts WHERE session_id = ?', (session_id,))
         c.execute('DELETE FROM appearance_history WHERE session_id = ?', (session_id,))
         c.execute('DELETE FROM character_plans WHERE session_id = ?', (session_id,))
+        c.execute('DELETE FROM character_plans_history WHERE session_id = ?', (session_id,))
         conn.commit()
         conn.close()
         logger.info(f"Session with ID '{session_id}' and all associated data deleted.")
@@ -614,7 +629,7 @@ class DBManager:
         logger.info(f"Stored character_system_prompt and dynamic_prompt_template for character '{character_name}' in session '{session_id}'.")
 
     #
-    # UPDATED: Character Plans (goal + steps as a list)
+    # UPDATED: Character Plans (goal + steps as a list), plus history
     #
     def get_character_plan(self, session_id: str, character_name: str) -> Optional[Dict[str, Any]]:
         conn = self._ensure_connection()
@@ -648,6 +663,7 @@ class DBManager:
         steps_str = json.dumps(steps)
         conn = self._ensure_connection()
         c = conn.cursor()
+        # Upsert into character_plans
         c.execute('''
             INSERT INTO character_plans (session_id, character_name, goal, steps)
             VALUES (?, ?, ?, ?)
@@ -656,6 +672,13 @@ class DBManager:
                           steps=excluded.steps,
                           updated_at=CURRENT_TIMESTAMP
         ''', (session_id, character_name, goal, steps_str))
+
+        # Always insert into history
+        c.execute('''
+            INSERT INTO character_plans_history (session_id, character_name, goal, steps)
+            VALUES (?, ?, ?, ?)
+        ''', (session_id, character_name, goal, steps_str))
+
         conn.commit()
         conn.close()
         logger.info(f"Saved character plan for '{character_name}' in session '{session_id}': goal={goal}, steps={steps}")

@@ -1,3 +1,4 @@
+# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/chats/chat_manager.py
 import os
 import logging
 from typing import List, Dict, Tuple, Optional
@@ -154,7 +155,7 @@ class ChatManager:
         else:
             logger.warning(f"No system/dynamic prompts found in YAML for '{char_name}'.")
 
-        # Ensure we have a plan for this character
+        # Ensure we do NOT assign a default plan.
         self.ensure_character_plan_exists(char_name)
 
     def remove_character(self, char_name: str):
@@ -164,17 +165,11 @@ class ChatManager:
 
     def ensure_character_plan_exists(self, char_name: str):
         """
-        Check if character plan is present in DB; if not, create an initial plan based on
-        the character's description. This is done once per character per session.
+        Check if character plan is present in DB; if not, do nothing (no default).
         """
         plan_data = self.db.get_character_plan(self.session_id, char_name)
         if plan_data is None:
-            # We create a default initial plan
-            default_goal = f"Establish a new personal goal for {char_name} based on their personality."
-            # Steps as an empty list
-            default_steps = []
-            self.db.save_character_plan(self.session_id, char_name, default_goal, default_steps)
-            logger.info(f"No existing plan for '{char_name}'. Created default plan.")
+            logger.info(f"No existing plan for '{char_name}'. Not creating any default plan.")
         else:
             logger.debug(f"Plan for '{char_name}' already exists in DB. Goal: {plan_data['goal']}")
 
@@ -183,7 +178,7 @@ class ChatManager:
         if plan_data:
             return CharacterPlan(goal=plan_data['goal'] or "", steps=plan_data['steps'] or [])
         else:
-            return CharacterPlan()  # default empty if not found
+            return CharacterPlan()  # remains empty if not found
 
     def save_character_plan(self, char_name: str, plan: CharacterPlan):
         self.db.save_character_plan(self.session_id, char_name, plan.goal, plan.steps)
@@ -288,7 +283,6 @@ class ChatManager:
         # Use the existing plan in a more structured way:
         #
         plan_obj = self.get_character_plan(character_name)
-        # Convert steps into a simple bullet or JSON-like list for display in the prompt
         steps_text = "\n".join(f"- {s}" for s in plan_obj.steps)
         plan_text = f"Goal: {plan_obj.goal}\nSteps:\n{steps_text}"
 
@@ -630,10 +624,15 @@ Include all fields in "corrected_interaction" if is_valid="no".
         """
         Calls the LLM to revise or confirm the existing plan for the given character
         based on the latest context. If the plan changes, we store it.
+        
+        Steps should be actionable and concrete, using the current location and appearance
+        (and other relevant information) as the start, and by the final step, the goal is reached.
         """
         plan_client = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml', output_model=CharacterPlan)
 
         existing_plan = self.get_character_plan(character_name)
+        current_appearance = self.db.get_character_appearance(self.session_id, character_name)
+
         plan_prompt = f"""
 You are helping to maintain a longer-term plan for {character_name}.
 Here is the character's current plan (goal + steps) and context:
@@ -643,18 +642,17 @@ Steps: {existing_plan.steps}
 CONTEXT
 - Current setting: {self.current_setting}
 - Current location: {self.get_combined_location()}
+- Current appearance: {current_appearance}
 
 LATEST DIALOGUE
 {"\\n".join(m["message"] for m in self.get_visible_history() if isinstance(m, dict))}
 
 INSTRUCTION
-{character_name}'s situation or plans might have changed. Make sure the steps to reach goal align with the context and latest events.
+{character_name}'s situation or plans might have changed. Make sure the steps to reach the goal are actionable, concrete, and use the current location and appearance (and any other relevant info) as the starting point. By the final step, the goal should be reached.
 If needed, revise the plan:
 - The "goal" might change or remain the same.
 - The "steps" is a list of strings; add, remove, or modify them as needed.
-- They should logically connect to the new events in the story.
-
-Output strictly in JSON, matching this structure:
+- Output strictly in JSON, matching this structure:
 {{
   "goal": "<string>",
   "steps": [ "step1", "step2", ... ]
@@ -678,3 +676,42 @@ If nothing should change, just repeat the current plan.
             logger.info(f"Plan updated for '{character_name}'. New goal: {new_plan.goal}, steps: {new_plan.steps}")
         except Exception as e:
             logger.error(f"Failed to parse new plan data. Keeping old plan. Error: {e}")
+
+    async def generate_character_introduction_message(self, character_name: str):
+        """
+        Generates the character's introduction and then triggers an initial plan update.
+        """
+        logger.info(f"Building introduction prompts for character: {character_name}")
+        system_prompt, introduction_prompt = self.build_introduction_prompts_for_character(character_name)
+        introduction_llm_client = OllamaClient(
+            'src/multipersona_chat_app/config/llm_config.yaml',
+            output_model=None
+        )  # We'll parse manually
+
+        try:
+            introduction_response = introduction_llm_client.generate(
+                prompt=introduction_prompt,
+                system=system_prompt
+            )
+            if not introduction_response:
+                logger.warning(f"Empty introduction response for {character_name}.")
+                return
+
+            # In case the introduction is structured per CharacterIntroductionOutput:
+            # If you have an output model for intros, parse it. Otherwise just treat as text.
+            # For brevity here, assume it's plain text (the code can be extended to parse if needed).
+            intro_text = introduction_response.strip()
+            msg_id = self.add_message(
+                character_name,
+                intro_text,
+                visible=True,
+                message_type="character"
+            )
+            logger.info(f"Saved introduction message for {character_name}")
+
+        except Exception as e:
+            logger.error(f"Error generating introduction for {character_name}: {e}", exc_info=True)
+            return
+
+        # Now generate the initial plan
+        await self.update_character_plan(character_name)
