@@ -648,7 +648,7 @@ LATEST DIALOGUE
 {"\\n".join(m["message"] for m in self.get_visible_history() if isinstance(m, dict))}
 
 INSTRUCTION
-The character's situation or plans might have changed. Make sure the steps to reach goal align with the context and latest events.
+{character_name}'s situation or plans might have changed. Make sure the steps to reach goal align with the context and latest events.
 If needed, revise the plan:
 - The "goal" might change or remain the same.
 - The "steps" is a list of strings; add, remove, or modify them as needed.
