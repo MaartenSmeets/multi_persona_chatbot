@@ -667,7 +667,7 @@ Your focus is to create plans that are logical, detailed, and aligned with the c
 **Instructions:**
 - Review the existing plan and the current context for {character_name}.
 - Determine if the plan needs to be revised based on any changes in {character_name}'s situation.
-- Ensure that the steps to reach the goal are actionable, concrete, and start from the current location and appearance.
+- Ensure that the steps to reach the goal are actionable, concrete, sequential and start from the current location at setting and current appearance.
 - By the final step, the goal should be achieved.
 - If revisions are necessary:
     - The "goal" might change or remain the same.
