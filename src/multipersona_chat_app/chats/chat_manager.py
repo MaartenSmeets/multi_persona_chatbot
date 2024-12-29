@@ -617,65 +617,110 @@ Include all fields in "corrected_interaction" if is_valid="no".
         # Not reached normally
         return None
 
-    #
-    # UPDATED: Let LLM revise or create the plan for the character if needed
-    #
     async def update_character_plan(self, character_name: str):
         """
-        Calls the LLM to revise or confirm the existing plan for the given character
-        based on the latest context. If the plan changes, we store it.
-        
-        Steps should be actionable and concrete, using the current location and appearance
-        (and other relevant information) as the start, and by the final step, the goal is reached.
-        """
-        plan_client = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml', output_model=CharacterPlan)
+        Revise or confirm the existing plan for the given character based on the latest context.
+        If the plan changes, store the new plan.
 
+        The plan consists of a goal and actionable, concrete steps starting from the character's current
+        location and appearance, leading to the achievement of the goal.
+        """
+        # Initialize the LLM client with the appropriate configuration and output model
+        plan_client = OllamaClient(
+            config_path='src/multipersona_chat_app/config/llm_config.yaml',
+            output_model=CharacterPlan
+        )
+
+        # Retrieve existing plan and current appearance of the character
         existing_plan = self.get_character_plan(character_name)
         current_appearance = self.db.get_character_appearance(self.session_id, character_name)
+        character_description = self.characters[character_name].character_description
 
-        plan_prompt = f"""
-You are helping to maintain a longer-term plan for {character_name}.
-Here is the character's current plan (goal + steps) and context:
-Goal: {existing_plan.goal}
-Steps: {existing_plan.steps}
+        # Define the system prompt to set the role and instructions for the LLM
+        system_prompt = """
+You are an expert assistant in crafting and refining long-term plans for narrative characters. Your primary responsibility is to ensure that each character's plan is practical, achievable within hours or days, and tailored to their current context, including their location and appearance. Each plan consists of:
 
-CONTEXT
-- Current setting: {self.current_setting}
-- Current location: {self.get_combined_location()}
-- Current appearance: {current_appearance}
+- A clear goal: The ultimate objective the character seeks to achieve.
+- Actionable steps: Specific, concrete, and sequential tasks that systematically progress the character toward their goal.
 
-LATEST DIALOGUE
-{"\\n".join(m["message"] for m in self.get_visible_history() if isinstance(m, dict))}
+Your focus is to create plans that are logical, detailed, and aligned with the character’s circumstances.
+        """
 
-INSTRUCTION
-{character_name}'s situation or plans might have changed. Make sure the steps to reach the goal are actionable, concrete, and use the current location and appearance (and any other relevant info) as the starting point. By the final step, the goal should be reached.
-If needed, revise the plan:
-- The "goal" might change or remain the same.
-- The "steps" is a list of strings; add, remove, or modify them as needed.
-- Output strictly in JSON, matching this structure:
+        # Define the user prompt with specific details about the character and context
+        user_prompt = f"""
+**Character Name:** {character_name}
+**Character description:** {character_description}
+
+**Existing Plan:**
+- **Goal:** {existing_plan.goal}
+- **Steps:**
+{''.join(f'  - {step}\n' for step in existing_plan.steps)}
+
+**Context:**
+- **Current Setting:** {self.current_setting}
+- **Current Location:** {self.get_combined_location()}
+- **Current Appearance:** {current_appearance}
+
+**Latest Dialogue:**
+{''.join(f'- {m["message"]}\n' for m in self.get_visible_history() if isinstance(m, dict))}
+
+**Instructions:**
+- Review the existing plan and the current context for {character_name}.
+- Determine if the plan needs to be revised based on any changes in {character_name}'s situation.
+- Ensure that the steps to reach the goal are actionable, concrete, and start from the current location and appearance.
+- By the final step, the goal should be achieved.
+- If revisions are necessary:
+    - The "goal" might change or remain the same.
+    - Modify the "steps" as needed by adding, removing, or updating them.
+- Output the updated plan strictly in JSON format following this structure:
+
 {{
-  "goal": "<string>",
-  "steps": [ "step1", "step2", ... ]
+"goal": "<string>",
+"steps": [ "step1", "step2", ... ]
 }}
-If nothing should change, just repeat the current plan.
+
+**Example JSON:**
+{{
+"goal": "Achieve relaxation during a visit to the hot springs.",
+"steps": [
+    "Change into swimwear.",
+    "Soak in the hot springs to relax.",
+    "Take a break to hydrate and enjoy the surroundings.",
+    "Rinse off and change into your clothes."
+]
+}}
+
+If no changes are needed, repeat the existing plan in the specified JSON format.
 """
 
-        plan_result = plan_client.generate(prompt=plan_prompt, use_cache=False)
+        # Generate the updated plan using the LLM
+        plan_result = plan_client.generate(prompt=user_prompt, system=system_prompt, use_cache=False)
+
+        # Handle the case where no result is returned
         if not plan_result:
             logger.warning("Plan update returned no result. Keeping existing plan.")
             return
 
         try:
-            # Because output_model=CharacterPlan, plan_result might already be a CharacterPlan object:
+            # Parse the plan result into a CharacterPlan object
             if isinstance(plan_result, CharacterPlan):
-                new_plan = plan_result
+                new_plan: CharacterPlan = plan_result
             else:
                 new_plan = CharacterPlan.model_validate_json(plan_result)
 
+            # Save the new plan if it's different from the existing one
             self.save_character_plan(character_name, new_plan)
-            logger.info(f"Plan updated for '{character_name}'. New goal: {new_plan.goal}, steps: {new_plan.steps}")
+            logger.info(
+                f"Plan updated for '{character_name}'. "
+                f"New goal: {new_plan.goal}, steps: {new_plan.steps}"
+            )
         except Exception as e:
-            logger.error(f"Failed to parse new plan data. Keeping old plan. Error: {e}")
+            # Log the error and retain the existing plan
+            logger.error(
+                f"Failed to parse new plan data for '{character_name}'. "
+                f"Keeping old plan. Error: {e}"
+            )
+
 
     async def generate_character_introduction_message(self, character_name: str):
         """
