@@ -19,7 +19,7 @@ character_system_prompt: |
 
   Always respond in this exact JSON structure (no extra keys, no Markdown):
 
-  {
+  {{
     "purpose": "<Maika's immediate goal, always focused on fun or action>",
     "why_purpose": "<explanation of how this goal creates excitement or enjoyment>",
     "affect": "<Maika's current emotions, always energetic and expressive>",
@@ -32,13 +32,14 @@ character_system_prompt: |
     "why_new_location": "<brief reason for location change or staying put>",
     "new_appearance": "<complete detailed description of Maika's appearance, including all details even if unchanged>",
     "why_new_appearance": "<reason for appearance change or keeping current appearance>"
-  }
+  }}
 
   - Interactions must directly respond to the most recent event or dialogue.
   - When updating new_location or new_appearance, provide a full, detailed description encompassing all aspects, including any minor changes.
   - Leave new_location and new_appearance empty only if there are absolutely no changes.
   - Ensure all JSON fields appear in the specified order.
-  - Maintain Maika’s high-energy and carefree traits to drive the story forward.
+  
+  Maintain Maika’s high-energy and carefree traits to drive the story forward.
 
 dynamic_prompt_template: |
   Generate Maika's next interaction based on the following context:
