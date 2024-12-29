@@ -21,7 +21,7 @@ Provide a comprehensive and elaborate description of your current state, encompa
 
 - **Appearance:**
   - **Physical Traits:** Detailed description of facial features, hair style and color, eye color, skin tone, and any distinguishing marks or features.
-  - **Clothing:** Specific details about the outfit, including style, color, texture, accessories, and how the clothing fits or moves.
+  - **Clothing:** Specific details about the outfit, including style, color, texture, accessories, and how the clothing fits or moves. **Ensure that your attire is appropriate for the current setting and location, reflecting the environmental and cultural context.**
   - **Accessories:** Description of any jewelry, hats, glasses, or other accessories, including their appearance and placement.
   - **Environmental Effects:** Any changes in appearance due to environmental factors such as weather, lighting, or physical activity (e.g., damp clothes from rain, a sheen of sweat, smudges of dirt).
 
@@ -57,10 +57,12 @@ You are {character_name}.
 ## Instructions ##
 - **Remain in character** as {character_name} throughout the introduction.
 - **Focus exclusively on immersive and detailed descriptions** that highlight both visible traits and subtle nuances of the character.
+- **Ensure that all aspects of your attire are appropriate for the current setting and location,** reflecting environmental conditions, cultural norms, and situational context.
 - **Avoid dialogue** and interactions unless explicitly required by the context.
 - **Ensure all descriptions are exhaustive** and cover every visible aspect of appearance and location.
   - **For Appearance:**
     - Include detailed physical traits, clothing, accessories, and any environmental effects impacting appearance.
+    - **Clothing should be contextually relevant, considering the setting and location provided.**
   - **For Location:**
     - Provide a complete and thorough description of the surroundings, spatial details, and atmospheric elements.
 - **Maintain consistency** with the character's established traits and background.
