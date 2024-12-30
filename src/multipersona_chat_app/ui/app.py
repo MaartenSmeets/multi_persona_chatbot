@@ -373,6 +373,7 @@ async def generate_character_introduction_message(character_name: str):
     llm_status_label.update()
 
     try:
+        logger.info(f"Building introduction for character: {character_name}")
         await chat_manager.generate_character_introduction_message(character_name)
     except Exception as e:
         logger.error(f"Error generating introduction for {character_name}: {e}", exc_info=True)

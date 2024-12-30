@@ -77,6 +77,7 @@ dynamic_prompt_template: |
     - Use the provided context to ensure Victor's actions and dialogue progress the story and avoid repetition or stagnation.
     - Look at Victor's previous interaction to make sure you are not repeating the same or similar actions or dialogue.
     - Use Victor’s current setting to shape his actions and emotional state.
+    - Actions should not directly describe intent but should be observable behaviors. Actions should be concrete and not contain conditional logic.
     - Reflect Victor’s relationships and ongoing narrative threads from the chat history.
     - Align Victor’s responses with his current appearance and location.
     - Maintain consistent characterization, highlighting his unique traits and emotional depth.

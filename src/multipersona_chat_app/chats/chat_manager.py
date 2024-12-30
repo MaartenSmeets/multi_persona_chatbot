@@ -10,7 +10,8 @@ from datetime import datetime
 import yaml
 from templates import (
     INTRODUCTION_TEMPLATE,
-    CHARACTER_INTRODUCTION_SYSTEM_PROMPT_TEMPLATE
+    CHARACTER_INTRODUCTION_SYSTEM_PROMPT_TEMPLATE,
+    CharacterIntroductionOutput
 )
 from models.interaction import Interaction
 from pydantic import BaseModel, Field
@@ -745,7 +746,7 @@ If no changes are needed, repeat the existing plan in the specified JSON format.
         system_prompt, introduction_prompt = self.build_introduction_prompts_for_character(character_name)
         introduction_llm_client = OllamaClient(
             'src/multipersona_chat_app/config/llm_config.yaml',
-            output_model=None
+            output_model=CharacterIntroductionOutput
         )
 
         try:
@@ -754,18 +755,30 @@ If no changes are needed, repeat the existing plan in the specified JSON format.
                 prompt=introduction_prompt,
                 system=system_prompt
             )
-            if not introduction_response:
-                logger.warning(f"Empty introduction response for {character_name}.")
-                return
 
-            intro_text = introduction_response.strip()
-            msg_id = await self.add_message(
-                character_name,
-                intro_text,
-                visible=True,
-                message_type="character"
-            )
-            logger.info(f"Saved introduction message for {character_name}")
+            if isinstance(introduction_response, CharacterIntroductionOutput):
+                intro_text = introduction_response.introduction_text.strip()
+                appearance = introduction_response.current_appearance.strip()
+                location = introduction_response.current_location.strip()
+
+                logger.info(f"Introduction generated for {character_name}. Text: {intro_text}")
+
+                msg_id = await self.add_message(
+                    character_name,
+                    intro_text,
+                    visible=True,
+                    message_type="character"
+                )
+
+                if appearance:
+                    await self.handle_new_appearance_for_character(character_name, appearance, msg_id)
+                if location:
+                    await self.handle_new_location_for_character(character_name, location, msg_id)
+
+                logger.info(f"Saved introduction message for {character_name}")
+            else:
+                logger.warning(f"Invalid response received for introduction of {character_name}. Response: {introduction_response}")
+
 
         except Exception as e:
             logger.error(f"Error generating introduction for {character_name}: {e}", exc_info=True)

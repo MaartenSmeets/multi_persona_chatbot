@@ -80,6 +80,7 @@ dynamic_prompt_template: |
   - Respond primarily to the ### Latest Dialogue Line, referencing other context only as needed.
   - Use the provided context to ensure Maika's actions and dialogue progress the story and avoid repetition or stagnation.
   - Look at Luna's previous interaction to make sure you are not repeating the same or similar actions or dialogue.
+  - Actions should not directly describe intent but should be observable behaviors. Actions should be concrete and not contain conditional logic.
   - Use details from Luna’s current setting to enhance her dreamy responses and inform her actions.
   - Reflect Luna’s relationships and ongoing narrative threads by considering the chat history in her responses.
   - Ensure Luna’s responses align with her current appearance and location, making them situationally fitting and natural.
