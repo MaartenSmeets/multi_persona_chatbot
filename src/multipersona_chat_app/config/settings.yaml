@@ -1,26 +1,23 @@
-- name: "Default Setting"
+- name: "Velvet Embrace"
+  description: "An exclusive and romantic escape designed for couples, offering a private haven in a luxurious love hotel where every detail is tailored for intimacy and relaxation."
+  start_location: "A beautifully appointed romantic bedroom featuring a grand, plush bed with soft satin sheets and an abundance of pillows. The room is bathed in a warm, ambient glow from dimmable lights, accentuated by elegant furnishings and thoughtful touches like rose petals scattered across the bed. The sound-isolating walls ensure complete privacy, while a modern entertainment system, mirrored ceiling, and an en-suite jacuzzi provide an indulgent and sensuous atmosphere. A chilled bottle of champagne and a selection of fine chocolates await on a nearby table, completing the scene of a perfect romantic retreat."
+
+- name: "Coffeehouse"
   description: "A lively and sociable coffeehouse environment, designed for natural, friendly exchanges and lighthearted conversations."
   start_location: "A corner table in a popular downtown coffee shop with exposed brick walls, reclaimed wood furniture, and a chalkboard menu featuring artisan beverages. The hum of conversations blends with soft jazz playing in the background."
 
-- name: "Intimate Setting"
-  description: "A serene and intimate retreat nestled in Japan's forested mountains, offering a harmonious blend of natural beauty and cultural elegance."
-  start_location: "A secluded outdoor hot spring bordered by smooth stones and towering cedar trees. Steam rises gently into the cool night air under a sparkling starlit sky. Lanterns provide a warm glow, illuminating the path to a nearby traditional ryokan with plush tatami mats and soft futons."
+- name: "Whispering Springs"
+  description: "A serene and intimate retreat nestled in Japan's forested mountains, offering a harmonious blend of natural beauty, cultural elegance, and the unique experience of mixed baths and pools."
+  start_location: "A secluded outdoor hot spring featuring mixed baths bordered by smooth stones and towering cedar trees. The tranquil pools offer a shared space for relaxation, with steam rising gently into the cool night air under a sparkling starlit sky. Lanterns provide a warm glow, illuminating the path to a nearby traditional ryokan with plush tatami mats and soft futons, ensuring an authentic and unforgettable experience."
 
-- name: "Intimate Setting 2"
-  description: "An exclusive hideaway deep within Thailand's lush islands, where turquoise waters meet pristine white sand beaches under a balmy tropical sky."
-  start_location: "A secluded private villa on the beach, featuring an outdoor pool that flows into the sea. The atmosphere is set with soft music and warm candlelight at sunset. Inside, a luxurious king-size bed sits atop plush carpeting, surrounded by large windows offering breathtaking ocean views. The room is cooled to perfection, filled with the sweet scent of frangipani flowers."
-
-- name: "Intimate Setting 3"
-  description: "A locked romantic bedroom in a love hotel"
-  start_location: "A locked romantic bedroom with big bed and sound isolating walls"
-- name: "Formal Setting"
+- name: "Corperate Boardroom"
   description: "A sophisticated corporate environment crafted for productive and structured professional interactions, ensuring clarity and focus."
   start_location: "A spacious and modern boardroom on the top floor of a skyscraper, featuring a polished oak table, ergonomic chairs, and a high-resolution projector displaying a presentation. Floor-to-ceiling windows reveal an expansive view of the city's skyline, adding a touch of grandeur."
 
-- name: "Adventurous Setting"
+- name: "Wilderness Setting"
   description: "A dramatic and untamed wilderness backdrop that inspires daring conversations and dynamic exchanges."
   start_location: "A rugged cliffside campsite perched above a sweeping canyon, where the golden light of dawn reflects off jagged rock faces. A crackling campfire provides warmth as the distant roar of a waterfall and the cries of birds echo through the gorge."
 
-- name: "Relaxed Setting"
+- name: "Seaside Cabana"
   description: "A picturesque seaside environment where tranquility and leisure set the stage for easygoing and heartfelt conversations."
   start_location: "A secluded beach lined with swaying palm trees and soft white sand, where the gentle rhythm of turquoise waves creates a calming ambiance. A comfortable cabana with plush seating and a nearby cooler stocked with refreshing drinks completes the serene picture."

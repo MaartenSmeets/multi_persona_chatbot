@@ -170,17 +170,18 @@ def create_new_session(_):
     logger.info(f"Creating new session: {session_name} with ID: {new_id}")
     chat_manager.db.create_session(new_id, session_name)
 
-    intimate_setting = next((s for s in ALL_SETTINGS if s['name'] == "Intimate Setting"), None)
-    if intimate_setting:
+    # Default to the first setting in ALL_SETTINGS if available
+    if ALL_SETTINGS:
+        default_setting = ALL_SETTINGS[0]
         chat_manager.set_current_setting(
-            intimate_setting['name'],
-            intimate_setting['description'],
-            intimate_setting['start_location']
+            default_setting['name'],
+            default_setting['description'],
+            default_setting['start_location']
         )
-        settings_dropdown.value = intimate_setting['name']
+        settings_dropdown.value = default_setting['name']
         settings_dropdown.update()
     else:
-        logger.error("'Intimate Setting' not found in settings. No default setting applied.")
+        logger.error("No settings found. No default setting applied.")
 
     load_session(new_id)
 
@@ -194,6 +195,7 @@ def delete_session(_):
             logger.info(f"Deleting session: {to_delete[0]['name']} with ID: {sid}")
             chat_manager.db.delete_session(sid)
             if sid == chat_manager.session_id:
+                # If we're deleting the session currently in use, pick another or create new
                 remaining_sessions = chat_manager.db.get_all_sessions()
                 if remaining_sessions:
                     new_session = remaining_sessions[0]
@@ -203,17 +205,18 @@ def delete_session(_):
                     new_id = str(uuid.uuid4())
                     new_session_name = f"Session {new_id}"
                     chat_manager.db.create_session(new_id, new_session_name)
-                    intimate_setting = next((s for s in ALL_SETTINGS if s['name'] == "Intimate Setting"), None)
-                    if intimate_setting:
+                    if ALL_SETTINGS:
+                        default_setting = ALL_SETTINGS[0]
                         chat_manager.set_current_setting(
-                            intimate_setting['name'],
-                            intimate_setting['description'],
-                            intimate_setting['start_location']
+                            default_setting['name'],
+                            default_setting['description'],
+                            default_setting['start_location']
                         )
-                        settings_dropdown.value = intimate_setting['name']
+                        settings_dropdown.value = default_setting['name']
                         settings_dropdown.update()
                     else:
-                        logger.error("'Intimate Setting' not found. No default setting applied.")
+                        logger.error("No settings found. No default setting applied.")
+
                     logger.info(f"No remaining sessions. Created and loading new session: {new_session_name}")
                     load_session(new_id)
             else:
@@ -239,17 +242,18 @@ def load_session(session_id: str):
         settings_dropdown.value = setting['name']
         settings_dropdown.update()
     else:
-        intimate_setting = next((s for s in ALL_SETTINGS if s['name'] == "Intimate Setting"), None)
-        if intimate_setting:
+        # If we don't find a matching setting, default to the first if any
+        if ALL_SETTINGS:
+            default_setting = ALL_SETTINGS[0]
             chat_manager.set_current_setting(
-                intimate_setting['name'],
-                intimate_setting['description'],
-                intimate_setting['start_location']
+                default_setting['name'],
+                default_setting['description'],
+                default_setting['start_location']
             )
-            settings_dropdown.value = intimate_setting['name']
+            settings_dropdown.value = default_setting['name']
             settings_dropdown.update()
         else:
-            logger.error("No setting found and 'Intimate Setting' not available.")
+            logger.error("No setting found to fall back to.")
 
     session_chars = chat_manager.db.get_session_characters(session_id)
     for c_name in session_chars:
@@ -634,17 +638,17 @@ def start_ui():
     if not sessions:
         logger.info("No existing sessions found. Creating default session.")
         chat_manager.db.create_session(default_session, f"Session {default_session}")
-        intimate_setting = next((s for s in ALL_SETTINGS if s['name'] == "Intimate Setting"), None)
-        if intimate_setting:
+        if ALL_SETTINGS:
+            default_setting = ALL_SETTINGS[0]
             chat_manager.set_current_setting(
-                intimate_setting['name'],
-                intimate_setting['description'],
-                intimate_setting['start_location']
+                default_setting['name'],
+                default_setting['description'],
+                default_setting['start_location']
             )
-            settings_dropdown.value = intimate_setting['name']
+            settings_dropdown.value = default_setting['name']
             settings_dropdown.update()
         else:
-            logger.error("'Intimate Setting' not found. Cannot set a default setting.")
+            logger.error("No settings found. Cannot set a default setting.")
         load_session(default_session)
     else:
         first_session = sessions[0]

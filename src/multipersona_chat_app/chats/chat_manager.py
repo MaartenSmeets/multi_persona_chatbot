@@ -48,6 +48,7 @@ class ChatManager:
         self.automatic_running = False
         self.you_name = you_name
         self.session_id = session_id if session_id else "default_session"
+        # Store settings in a dict keyed by setting name
         self.settings = {setting['name']: setting for setting in settings}
 
         config_path = os.path.join("src", "multipersona_chat_app", "config", "chat_manager_config.yaml")
@@ -65,50 +66,42 @@ class ChatManager:
 
         existing_sessions = {s['session_id']: s for s in self.db.get_all_sessions()}
         if self.session_id not in existing_sessions:
+            # Create a new session in the DB
             self.db.create_session(self.session_id, f"Session {self.session_id}")
-            # Default to "Intimate Setting" if available
-            intimate_setting = self.settings.get("Intimate Setting")
-            if intimate_setting:
+            # Default to the first setting in the provided settings list if available
+            if settings:
+                default_setting = settings[0]
                 self.set_current_setting(
-                    intimate_setting['name'],
-                    intimate_setting['description'],
-                    intimate_setting['start_location']
+                    default_setting['name'],
+                    default_setting['description'],
+                    default_setting['start_location']
                 )
             else:
-                logger.error("'Intimate Setting' not found in provided settings. No default setting will be applied.")
                 self.current_setting = None
+                logger.error("No settings available to set as default.")
         else:
+            # The session already exists, check if there's a stored current setting
             stored_setting = self.db.get_current_setting(self.session_id)
-            if stored_setting:
-                setting = self.settings.get(stored_setting)
-                if setting:
-                    self.set_current_setting(
-                        setting['name'],
-                        setting['description'],
-                        setting['start_location']
-                    )
-                else:
-                    intimate_setting = self.settings.get("Intimate Setting")
-                    if intimate_setting:
-                        self.set_current_setting(
-                            intimate_setting['name'],
-                            intimate_setting['description'],
-                            intimate_setting['start_location']
-                        )
-                    else:
-                        logger.error("No matching stored setting and 'Intimate Setting' not found.")
-                        self.current_setting = stored_setting
+            if stored_setting and stored_setting in self.settings:
+                # Use the stored setting from the DB
+                setting = self.settings[stored_setting]
+                self.set_current_setting(
+                    setting['name'],
+                    setting['description'],
+                    setting['start_location']
+                )
             else:
-                intimate_setting = self.settings.get("Intimate Setting")
-                if intimate_setting:
+                # If no valid stored setting, default to the first from the settings list
+                if settings:
+                    default_setting = settings[0]
                     self.set_current_setting(
-                        intimate_setting['name'],
-                        intimate_setting['description'],
-                        intimate_setting['start_location']
+                        default_setting['name'],
+                        default_setting['description'],
+                        default_setting['start_location']
                     )
                 else:
-                    logger.error("'Intimate Setting' not found. No setting applied.")
                     self.current_setting = None
+                    logger.error("No matching stored setting and no default setting found. No setting applied.")
 
     @staticmethod
     def load_config(config_path: str) -> dict:
@@ -778,7 +771,6 @@ If no changes are needed, repeat the existing plan in the specified JSON format.
                 logger.info(f"Saved introduction message for {character_name}")
             else:
                 logger.warning(f"Invalid response received for introduction of {character_name}. Response: {introduction_response}")
-
 
         except Exception as e:
             logger.error(f"Error generating introduction for {character_name}: {e}", exc_info=True)
