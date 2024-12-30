@@ -1,5 +1,3 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/chats/chat_manager.py
-
 import os
 import logging
 from typing import List, Dict, Tuple, Optional
@@ -183,12 +181,31 @@ class ChatManager:
         chars = self.get_character_names()
         if not chars:
             return None
-        return chars[self.turn_index % len(chars)]
+
+        all_msgs = self.db.get_messages(self.session_id)
+        if not all_msgs:
+            # If no conversation yet, default to the first added character
+            return chars[0]
+
+        last_speaker = all_msgs[-1]['sender']
+
+        # If the last speaker was the user, return the first character
+        if last_speaker == self.you_name:
+            return chars[0]
+
+        # If the last speaker was a character, pick the *next* character in the list
+        if last_speaker in chars:
+            idx = chars.index(last_speaker)
+            next_idx = (idx + 1) % len(chars)
+            return chars[next_idx]
+
+        # If the last speaker is something else (like system), just return the first character
+        return chars[0]
 
     def advance_turn(self):
-        chars = self.get_character_names()
-        if chars:
-            self.turn_index = (self.turn_index + 1) % len(chars)
+        # This is still called by the UI, but no longer controls next speaker order.
+        # We keep it to avoid breaking references, but it does nothing now.
+        pass
 
     #
     # CHANGE: 'add_message' is now async to avoid blocking when we do summarization.
@@ -389,10 +406,7 @@ class ChatManager:
     def stop_automatic_chat(self):
         self.automatic_running = False
 
-    #
-    # CHANGE 1: 'check_summarization' now looks at the total message count. If it reaches the threshold,
-    #           we summarize for all characters who have participated.
-    #
+
     async def check_summarization(self):
         all_msgs = self.db.get_messages(self.session_id)
         # If total visible messages so far is below threshold, do nothing
@@ -406,20 +420,29 @@ class ChatManager:
             if char_name in self.characters:
                 await self.summarize_history_for_character(char_name)
 
-    #
-    # CHANGE 2: Removed the per-character threshold check in 'summarize_history_for_character'.
-    #           This function will now always summarize any new messages for that character.
-    #
+
     async def summarize_history_for_character(self, character_name: str):
         msgs = self.db.get_messages(self.session_id)
         last_covered_id = self.db.get_latest_covered_message_id(self.session_id, character_name)
+        # We'll include the 'why' fields in the summarization lines
         relevant_msgs = [
-            (m["id"], m["sender"], m["message"], m["affect"], m.get("purpose", None))
+            (
+                m["id"],
+                m["sender"],
+                m["message"],
+                m["affect"],
+                m.get("purpose", None),
+                m.get("why_purpose", None),
+                m.get("why_affect", None),
+                m.get("why_action", None),
+                m.get("why_dialogue", None),
+                m.get("why_new_location", None),
+                m.get("why_new_appearance", None),
+            )
             for m in msgs
             if m["visible"] and m["message_type"] != "system" and m["id"] > last_covered_id
         ]
 
-        # Even if relevant_msgs is small, we proceed to generate a new summary for everything new
         if not relevant_msgs:
             logger.debug(f"No new relevant messages to summarize for '{character_name}'.")
             return
@@ -435,13 +458,39 @@ class ChatManager:
 
         history_lines = []
         max_message_id_in_chunk = 0
-        for (mid, sender, message, affect, purpose) in to_summarize:
+        for (
+            mid, sender, message, affect, purpose,
+            why_purpose, why_affect, why_action,
+            why_dialogue, why_new_location, why_new_appearance
+        ) in to_summarize:
+
             if mid > max_message_id_in_chunk:
                 max_message_id_in_chunk = mid
+
+            # Incorporate 'why_*' fields for the character’s own messages 
             if sender == character_name:
-                line = f"{sender} (Affect: {affect}, Purpose: {purpose}): {message}"
+                line_parts = [f"{sender}:"]
+                line_parts.append(f"(Affect={affect}, Purpose={purpose})")
+                # Include the reasoning fields if present
+                if why_purpose: 
+                    line_parts.append(f"why_purpose={why_purpose}")
+                if why_affect:
+                    line_parts.append(f"why_affect={why_affect}")
+                if why_action:
+                    line_parts.append(f"why_action={why_action}")
+                if why_dialogue:
+                    line_parts.append(f"why_dialogue={why_dialogue}")
+                if why_new_location:
+                    line_parts.append(f"why_new_location={why_new_location}")
+                if why_new_appearance:
+                    line_parts.append(f"why_new_appearance={why_new_appearance}")
+
+                line_parts.append(f"Message={message}")
+                line = " | ".join(line_parts)
             else:
+                # Other speakers
                 line = f"{sender}: {message}"
+
             history_lines.append(line)
 
         # Add plan-change notes in this summarization chunk
@@ -458,24 +507,27 @@ class ChatManager:
 
         plan_changes_text = ""
         if plan_changes_notes:
-            plan_changes_text = "\n\nAdditionally, the following plan changes occurred:\n" + "\n".join(plan_changes_notes)
+            plan_changes_text = (
+                "\n\nAdditionally, the following plan changes occurred (with possible reasons in 'why_*' fields above):\n"
+                + "\n".join(plan_changes_notes)
+            )
 
         history_text = "\n".join(history_lines) + plan_changes_text
 
         prompt = f"""You are summarizing the conversation **from {character_name}'s perspective**.
 Focus on newly revealed or changed details (feelings, location, appearance, important topic shifts, interpersonal dynamics).
-Also include any plan changes in goal or steps that occurred during these messages (already listed below).
-Do **not** restate the entire environment or old details. Keep it concise and relevant to what {character_name} newly learns or experiences.
+Incorporate any 'why_*' information to clarify motivations or changes in mind/goals.
+Also note any plan changes or newly revealed steps in the plan. 
+Avoid restating old environment details unless crucial.
 
 Recent events to summarize:
 {history_text}
 
-Now produce a short summary from {character_name}'s viewpoint.
+Now produce a short summary from {character_name}'s viewpoint, emphasizing why changes happened (based on 'why_*' fields) when relevant.
 """
 
         logger.debug(f"Summarization prompt for '{character_name}':\n{prompt}")
 
-        # Use background thread for LLM call
         summarize_llm = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml')
         new_summary = await asyncio.to_thread(summarize_llm.generate, prompt=prompt)
 
@@ -666,8 +718,7 @@ Include all fields in "corrected_interaction" if is_valid="no".
 
     #
     # CHANGE: 'update_character_plan' now compares old vs. new plan, generates a textual "change summary,"
-    #         and stores it along with the message ID that triggered the change. We pass an optional
-    #         triggered_message_id so we can link the plan change to the message that prompted it.
+    #         and stores it along with the message ID that triggered the change.
     #
     async def update_character_plan(self, character_name: str, triggered_message_id: Optional[int] = None):
         """
@@ -730,7 +781,6 @@ Your focus is to create plans that are logical, detailed, and aligned with the c
 If no changes are needed, repeat the existing plan in the specified JSON format.
 """
 
-        # LLM call in a background thread
         plan_result = await asyncio.to_thread(
             plan_client.generate,
             prompt=user_prompt,
@@ -751,7 +801,6 @@ If no changes are needed, repeat the existing plan in the specified JSON format.
             new_goal = new_plan.goal
             new_steps = new_plan.steps
 
-            # If there's a difference, build a short summary
             if (new_goal != old_goal) or (new_steps != old_steps):
                 change_explanation = self.build_plan_change_summary(old_goal, old_steps, new_goal, new_steps)
                 self.db.save_character_plan_with_history(
@@ -767,7 +816,6 @@ If no changes are needed, repeat the existing plan in the specified JSON format.
                     f"New goal: {new_goal}, steps: {new_steps}. Reason: {change_explanation}"
                 )
             else:
-                # If no changes, we just store again with no difference
                 self.db.save_character_plan_with_history(
                     self.session_id,
                     character_name,
@@ -785,21 +833,14 @@ If no changes are needed, repeat the existing plan in the specified JSON format.
             )
 
     def build_plan_change_summary(self, old_goal: str, old_steps: List[str], new_goal: str, new_steps: List[str]) -> str:
-        """
-        Returns a short textual explanation describing what changed from old plan to new plan.
-        """
         changes = []
         if old_goal != new_goal:
             changes.append(f"Goal changed from '{old_goal}' to '{new_goal}'.")
-        # Check steps difference
         if old_steps != new_steps:
             changes.append(f"Steps changed from {old_steps} to {new_steps}.")
         return " ".join(changes)
 
     async def generate_character_introduction_message(self, character_name: str):
-        """
-        Generates the character's introduction and then triggers an initial plan update.
-        """
         logger.info(f"Building introduction prompts for character: {character_name}")
         system_prompt, introduction_prompt = self.build_introduction_prompts_for_character(character_name)
         introduction_llm_client = OllamaClient(
