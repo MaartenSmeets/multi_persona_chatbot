@@ -252,13 +252,13 @@ class ChatManager:
 
         return message_id
 
-    def get_visible_history(self):
-        summaries = self.db.get_all_summaries(self.session_id, None)
-        visible_msgs = self.db.get_messages(self.session_id)
-        recent_msgs = visible_msgs[-self.recent_dialogue_lines:]
-        history = summaries + [m for m in recent_msgs if m["visible"]]
-        logger.debug(f"Retrieved {len(history)} messages for visible history.")
-        return history
+    def get_visible_history(self) -> List[Dict]:
+        """
+        Return only the visible messages as a list of dictionaries.
+        (Removed summary strings to avoid mixing dicts and strings.)
+        """
+        all_msgs = self.db.get_messages(self.session_id)
+        return [m for m in all_msgs if m["visible"]]
 
     def build_prompt_for_character(self, character_name: str) -> Tuple[str, str]:
         existing_prompts = self.db.get_character_prompts(self.session_id, character_name)
@@ -268,6 +268,7 @@ class ChatManager:
         system_prompt = existing_prompts['character_system_prompt']
         dynamic_prompt_template = existing_prompts['dynamic_prompt_template']
 
+        # We only retrieve messages as dictionaries here
         visible_history = self.get_visible_history()
         recent_msgs = visible_history[-self.recent_dialogue_lines:]
 
@@ -286,6 +287,7 @@ class ChatManager:
 
         latest_dialogue = "\n".join(formatted_dialogue_lines)
 
+        # Retrieve character-specific summaries and join them
         all_summaries = self.db.get_all_summaries(self.session_id, character_name)
         chat_history_summary = "\n\n".join(all_summaries) if all_summaries else ""
 
@@ -326,12 +328,14 @@ class ChatManager:
             appearance=char.appearance,
         )
 
+        # Again, retrieve only message dictionaries
         visible_history = self.get_visible_history()
         latest_dialogue = visible_history[-1]['message'] if visible_history else ""
         
         if latest_dialogue:
             latest_dialogue = f"### Latest Dialogue Line:\n{latest_dialogue}"
 
+        # Grab character-specific summaries
         all_summaries = self.db.get_all_summaries(self.session_id, character_name)
         chat_history_summary = "\n\n".join(all_summaries) if all_summaries else ""
 
@@ -594,11 +598,12 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
             logger.info(f"Character '{character_name}' updated appearance to '{new_appearance}'.")
 
     def get_all_visible_messages(self) -> List[Dict]:
-        summaries = self.db.get_all_summaries(self.session_id, None)
+        """
+        Return only the visible messages as a list of dictionaries.
+        (Removed summary strings to avoid mixing dicts and strings.)
+        """
         visible_msgs = self.db.get_messages(self.session_id)
-        recent_msgs = visible_msgs[-self.recent_dialogue_lines:]
-        history = summaries + [m for m in recent_msgs if m["visible"]]
-        return history
+        return [m for m in visible_msgs if m["visible"]]
     
     async def validate_and_possibly_correct_interaction(
         self,
@@ -884,3 +889,4 @@ If no changes are needed, repeat the existing plan in the specified JSON format.
 
         # Now generate the initial plan
         await self.update_character_plan(character_name, triggered_message_id=None)
+
