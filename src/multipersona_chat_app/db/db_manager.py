@@ -1,4 +1,5 @@
 # File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/db/db_manager.py
+
 import sqlite3
 import logging
 from typing import List, Dict, Any, Optional
@@ -175,7 +176,7 @@ class DBManager:
             )
         ''')
 
-        # NEW: History table for plan changes
+        # NEW: History table for plan changes, extended with triggered_by_message_id and a textual change_summary
         c.execute('''
             CREATE TABLE IF NOT EXISTS character_plans_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -184,9 +185,24 @@ class DBManager:
                 goal TEXT,
                 steps TEXT,
                 changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(session_id) REFERENCES sessions(session_id)
+                triggered_by_message_id INTEGER,
+                change_summary TEXT,
+                FOREIGN KEY(session_id) REFERENCES sessions(session_id),
+                FOREIGN KEY(triggered_by_message_id) REFERENCES messages(id)
             )
         ''')
+
+        # Add columns to character_plans_history if they do not exist (to support updates)
+        history_columns = [
+            ("triggered_by_message_id", "INTEGER"),
+            ("change_summary", "TEXT"),
+        ]
+        for col, ctype in history_columns:
+            try:
+                c.execute(f"ALTER TABLE character_plans_history ADD COLUMN {col} {ctype}")
+                logger.info(f"Added column '{col}' to 'character_plans_history' table.")
+            except sqlite3.OperationalError:
+                logger.debug(f"Column '{col}' already exists in 'character_plans_history' table. Skipping.")
 
         conn.commit()
         conn.close()
@@ -629,7 +645,7 @@ class DBManager:
         logger.info(f"Stored character_system_prompt and dynamic_prompt_template for character '{character_name}' in session '{session_id}'.")
 
     #
-    # UPDATED: Character Plans (goal + steps as a list), plus history
+    # UPDATED: Character Plans (goal + steps as a list), plus history with triggered_by_message_id and change_summary
     #
     def get_character_plan(self, session_id: str, character_name: str) -> Optional[Dict[str, Any]]:
         conn = self._ensure_connection()
@@ -659,10 +675,39 @@ class DBManager:
         return None
 
     def save_character_plan(self, session_id: str, character_name: str, goal: str, steps: List[str]):
-        # Serialize the steps list as JSON
+        # This function is used if you just want to directly store goal/steps without history explanation
         steps_str = json.dumps(steps)
         conn = self._ensure_connection()
         c = conn.cursor()
+        c.execute('''
+            INSERT INTO character_plans (session_id, character_name, goal, steps)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(session_id, character_name)
+            DO UPDATE SET goal=excluded.goal,
+                          steps=excluded.steps,
+                          updated_at=CURRENT_TIMESTAMP
+        ''', (session_id, character_name, goal, steps_str))
+        conn.commit()
+        conn.close()
+        logger.info(f"Saved character plan for '{character_name}' in session '{session_id}': goal={goal}, steps={steps}")
+
+    def save_character_plan_with_history(
+        self,
+        session_id: str,
+        character_name: str,
+        goal: str,
+        steps: List[str],
+        triggered_by_message_id: Optional[int],
+        change_summary: str
+    ):
+        """
+        Save new plan in the main table and also log it in the plan history table with a summary
+        of changes and the message that caused it.
+        """
+        steps_str = json.dumps(steps)
+        conn = self._ensure_connection()
+        c = conn.cursor()
+
         # Upsert into character_plans
         c.execute('''
             INSERT INTO character_plans (session_id, character_name, goal, steps)
@@ -673,12 +718,50 @@ class DBManager:
                           updated_at=CURRENT_TIMESTAMP
         ''', (session_id, character_name, goal, steps_str))
 
-        # Always insert into history
+        # Insert into plan history with the plan changes
         c.execute('''
-            INSERT INTO character_plans_history (session_id, character_name, goal, steps)
-            VALUES (?, ?, ?, ?)
-        ''', (session_id, character_name, goal, steps_str))
+            INSERT INTO character_plans_history (session_id, character_name, goal, steps, triggered_by_message_id, change_summary)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (
+            session_id,
+            character_name,
+            goal,
+            steps_str,
+            triggered_by_message_id if triggered_by_message_id else None,
+            change_summary
+        ))
 
         conn.commit()
         conn.close()
-        logger.info(f"Saved character plan for '{character_name}' in session '{session_id}': goal={goal}, steps={steps}")
+        logger.info(
+            f"Saved character plan (with history) for '{character_name}' in session '{session_id}': "
+            f"goal={goal}, steps={steps}, triggered_by={triggered_by_message_id}, summary='{change_summary}'"
+        )
+
+    def get_plan_changes_for_range(self, session_id: str, character_name: str, after_message_id: int, up_to_message_id: int) -> List[Dict[str, Any]]:
+        """
+        Retrieve plan changes triggered by messages with ID in (after_message_id, up_to_message_id].
+        """
+        conn = self._ensure_connection()
+        c = conn.cursor()
+        c.execute('''
+            SELECT triggered_by_message_id, change_summary
+            FROM character_plans_history
+            WHERE session_id = ?
+              AND character_name = ?
+              AND triggered_by_message_id IS NOT NULL
+              AND triggered_by_message_id > ?
+              AND triggered_by_message_id <= ?
+            ORDER BY id ASC
+        ''', (session_id, character_name, after_message_id, up_to_message_id))
+        rows = c.fetchall()
+        conn.close()
+
+        results = []
+        for row in rows:
+            results.append({
+                "triggered_by_message_id": row[0],
+                "change_summary": row[1]
+            })
+        return results
+

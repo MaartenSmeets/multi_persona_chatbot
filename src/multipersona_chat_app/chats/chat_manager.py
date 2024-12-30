@@ -398,6 +398,8 @@ class ChatManager:
 
     #
     # CHANGE: 'summarize_history_for_character' is now async so we can run the LLM call in a background thread.
+    #         We also fetch plan changes that were triggered by messages in the chunk to summarize, so the final
+    #         summary includes how the plan changed and why.
     #
     async def summarize_history_for_character(self, character_name: str):
         msgs = self.db.get_messages(self.session_id)
@@ -420,17 +422,32 @@ class ChatManager:
         logger.debug(f"Messages to summarize for '{character_name}': {len(to_summarize)}. Covering up to message ID: {covered_up_to_message_id}.")
 
         history_lines = []
+        max_message_id_in_chunk = 0
         for (mid, sender, message, affect, purpose) in to_summarize:
+            if mid > max_message_id_in_chunk:
+                max_message_id_in_chunk = mid
             if sender == character_name:
                 line = f"{sender} (Affect: {affect}, Purpose: {purpose}): {message}"
             else:
                 line = f"{sender}: {message}"
             history_lines.append(line)
 
-        history_text = "\n".join(history_lines)
+        # Add plan-change notes in this summarization chunk
+        plan_changes_notes = []
+        plan_changes = self.db.get_plan_changes_for_range(self.session_id, character_name, last_covered_id, max_message_id_in_chunk)
+        for pc in plan_changes:
+            note = f"Plan changed (message {pc['triggered_by_message_id']}): {pc['change_summary']}"
+            plan_changes_notes.append(note)
 
-        prompt = f"""You are summarizing the conversation **from {character_name}'s perspective**. 
+        plan_changes_text = ""
+        if plan_changes_notes:
+            plan_changes_text = "\n\nAdditionally, the following plan changes occurred:\n" + "\n".join(plan_changes_notes)
+
+        history_text = "\n".join(history_lines) + plan_changes_text
+
+        prompt = f"""You are summarizing the conversation **from {character_name}'s perspective**.
 Focus on newly revealed or changed details (feelings, location, appearance, important topic shifts, interpersonal dynamics).
+Also include any plan changes in goal or steps that occurred during these messages (already listed below).
 Do **not** restate the entire environment or old details. Keep it concise and relevant to what {character_name} newly learns or experiences.
 
 Recent events to summarize:
@@ -606,7 +623,7 @@ Include all fields in "corrected_interaction" if is_valid="no".
 
             if validation_output.is_valid.lower() == "yes":
                 logger.debug(f"Interaction is valid on iteration {iteration}.")
-                await self.update_character_plan(character_name)
+                await self.update_character_plan(character_name, triggered_message_id=None)
                 return current_interaction
 
             corrected = validation_output.corrected_interaction
@@ -628,12 +645,14 @@ Include all fields in "corrected_interaction" if is_valid="no".
         return None
 
     #
-    # CHANGE: 'update_character_plan' calls the LLM in a separate thread so it won't block.
+    # CHANGE: 'update_character_plan' now compares old vs. new plan, generates a textual "change summary,"
+    #         and stores it along with the message ID that triggered the change. We pass an optional
+    #         triggered_message_id so we can link the plan change to the message that prompted it.
     #
-    async def update_character_plan(self, character_name: str):
+    async def update_character_plan(self, character_name: str, triggered_message_id: Optional[int] = None):
         """
         Revise or confirm the existing plan for the given character based on the latest context.
-        If the plan changes, store the new plan.
+        If the plan changes, store the new plan and a short summary describing what's different and why.
         """
         plan_client = OllamaClient(
             config_path='src/multipersona_chat_app/config/llm_config.yaml',
@@ -641,6 +660,9 @@ Include all fields in "corrected_interaction" if is_valid="no".
         )
 
         existing_plan = self.get_character_plan(character_name)
+        old_goal = existing_plan.goal
+        old_steps = existing_plan.steps
+
         current_appearance = self.db.get_character_appearance(self.session_id, character_name)
         character_description = self.characters[character_name].character_description
 
@@ -658,9 +680,9 @@ Your focus is to create plans that are logical, detailed, and aligned with the c
 **Character description:** {character_description}
 
 **Existing Plan:**
-- **Goal:** {existing_plan.goal}
+- **Goal:** {old_goal}
 - **Steps:**
-{''.join(f'  - {step}\n' for step in existing_plan.steps)}
+{''.join(f'  - {step}\n' for step in old_steps)}
 
 **Context:**
 - **Current Setting:** {self.current_setting}
@@ -685,17 +707,6 @@ Your focus is to create plans that are logical, detailed, and aligned with the c
 "steps": [ "step1", "step2", ... ]
 }}
 
-**Example JSON:**
-{{
-"goal": "Achieve relaxation during a visit to the hot springs.",
-"steps": [
-    "Change into swimwear.",
-    "Soak in the hot springs to relax.",
-    "Take a break to hydrate and enjoy the surroundings.",
-    "Rinse off and change into your clothes."
-]
-}}
-
 If no changes are needed, repeat the existing plan in the specified JSON format.
 """
 
@@ -717,20 +728,54 @@ If no changes are needed, repeat the existing plan in the specified JSON format.
             else:
                 new_plan = CharacterPlan.model_validate_json(plan_result)
 
-            self.save_character_plan(character_name, new_plan)
-            logger.info(
-                f"Plan updated for '{character_name}'. "
-                f"New goal: {new_plan.goal}, steps: {new_plan.steps}"
-            )
+            new_goal = new_plan.goal
+            new_steps = new_plan.steps
+
+            # If there's a difference, build a short summary
+            if (new_goal != old_goal) or (new_steps != old_steps):
+                change_explanation = self.build_plan_change_summary(old_goal, old_steps, new_goal, new_steps)
+                self.db.save_character_plan_with_history(
+                    self.session_id,
+                    character_name,
+                    new_goal,
+                    new_steps,
+                    triggered_message_id,
+                    change_explanation
+                )
+                logger.info(
+                    f"Plan updated for '{character_name}'. "
+                    f"New goal: {new_goal}, steps: {new_steps}. Reason: {change_explanation}"
+                )
+            else:
+                # If no changes, we just store again with no difference
+                self.db.save_character_plan_with_history(
+                    self.session_id,
+                    character_name,
+                    new_goal,
+                    new_steps,
+                    triggered_message_id,
+                    "No change in plan"
+                )
+                logger.info(f"Plan for '{character_name}' re-confirmed. No changes made.")
+
         except Exception as e:
             logger.error(
                 f"Failed to parse new plan data for '{character_name}'. "
                 f"Keeping old plan. Error: {e}"
             )
 
-    #
-    # We keep this async so the user can call it from app.py
-    #
+    def build_plan_change_summary(self, old_goal: str, old_steps: List[str], new_goal: str, new_steps: List[str]) -> str:
+        """
+        Returns a short textual explanation describing what changed from old plan to new plan.
+        """
+        changes = []
+        if old_goal != new_goal:
+            changes.append(f"Goal changed from '{old_goal}' to '{new_goal}'.")
+        # Check steps difference
+        if old_steps != new_steps:
+            changes.append(f"Steps changed from {old_steps} to {new_steps}.")
+        return " ".join(changes)
+
     async def generate_character_introduction_message(self, character_name: str):
         """
         Generates the character's introduction and then triggers an initial plan update.
@@ -777,4 +822,5 @@ If no changes are needed, repeat the existing plan in the specified JSON format.
             return
 
         # Now generate the initial plan
-        await self.update_character_plan(character_name)
+        await self.update_character_plan(character_name, triggered_message_id=None)
+
