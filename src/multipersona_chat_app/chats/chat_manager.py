@@ -390,16 +390,25 @@ class ChatManager:
         self.automatic_running = False
 
     #
-    # CHANGE: 'check_summarization' is now async; it calls 'await' on summarize_history_for_character.
+    # CHANGE 1: 'check_summarization' now looks at the total message count. If it reaches the threshold,
+    #           we summarize for all characters who have participated.
     #
     async def check_summarization(self):
-        for char_name in self.characters:
-            await self.summarize_history_for_character(char_name)
+        all_msgs = self.db.get_messages(self.session_id)
+        # If total visible messages so far is below threshold, do nothing
+        if len(all_msgs) < self.summarization_threshold:
+            return
+
+        # Summarize for all characters who have participated
+        participants = set(m["sender"] for m in all_msgs if m["message_type"] in ["user", "character"])
+        for char_name in participants:
+            # Only summarize for characters we actively manage
+            if char_name in self.characters:
+                await self.summarize_history_for_character(char_name)
 
     #
-    # CHANGE: 'summarize_history_for_character' is now async so we can run the LLM call in a background thread.
-    #         We also fetch plan changes that were triggered by messages in the chunk to summarize, so the final
-    #         summary includes how the plan changed and why.
+    # CHANGE 2: Removed the per-character threshold check in 'summarize_history_for_character'.
+    #           This function will now always summarize any new messages for that character.
     #
     async def summarize_history_for_character(self, character_name: str):
         msgs = self.db.get_messages(self.session_id)
@@ -410,16 +419,19 @@ class ChatManager:
             if m["visible"] and m["message_type"] != "system" and m["id"] > last_covered_id
         ]
 
-        logger.debug(f"Summarizing history for '{character_name}'. Total relevant messages: {len(relevant_msgs)} (threshold: {self.summarization_threshold})")
-
-        if len(relevant_msgs) < self.summarization_threshold:
-            logger.debug(f"Not enough messages to summarize for '{character_name}'. Required: {self.summarization_threshold}, available: {len(relevant_msgs)}.")
+        # Even if relevant_msgs is small, we proceed to generate a new summary for everything new
+        if not relevant_msgs:
+            logger.debug(f"No new relevant messages to summarize for '{character_name}'.")
             return
 
         to_summarize = relevant_msgs[:self.to_summarize_count]
         covered_up_to_message_id = to_summarize[-1][0] if to_summarize else last_covered_id
 
-        logger.debug(f"Messages to summarize for '{character_name}': {len(to_summarize)}. Covering up to message ID: {covered_up_to_message_id}.")
+        logger.debug(
+            f"Summarizing history for '{character_name}'. "
+            f"Messages to summarize: {len(to_summarize)}. "
+            f"Covering up to message ID: {covered_up_to_message_id}."
+        )
 
         history_lines = []
         max_message_id_in_chunk = 0
@@ -434,7 +446,12 @@ class ChatManager:
 
         # Add plan-change notes in this summarization chunk
         plan_changes_notes = []
-        plan_changes = self.db.get_plan_changes_for_range(self.session_id, character_name, last_covered_id, max_message_id_in_chunk)
+        plan_changes = self.db.get_plan_changes_for_range(
+            self.session_id,
+            character_name,
+            last_covered_id,
+            max_message_id_in_chunk
+        )
         for pc in plan_changes:
             note = f"Plan changed (message {pc['triggered_by_message_id']}): {pc['change_summary']}"
             plan_changes_notes.append(note)
@@ -489,7 +506,10 @@ Now produce a short summary from {character_name}'s viewpoint.
             finally:
                 conn.close()
 
-        logger.info(f"Summarized and concealed old messages for '{character_name}', up to message ID {covered_up_to_message_id}.")
+        logger.info(
+            f"Summarized and concealed old messages for '{character_name}', "
+            f"up to message ID {covered_up_to_message_id}."
+        )
 
     def get_session_name(self) -> str:
         sessions = self.db.get_all_sessions()
@@ -823,4 +843,3 @@ If no changes are needed, repeat the existing plan in the specified JSON format.
 
         # Now generate the initial plan
         await self.update_character_plan(character_name, triggered_message_id=None)
-
