@@ -1,5 +1,3 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/ui/app.py
-
 import os
 import uuid
 import asyncio
@@ -416,7 +414,7 @@ async def generate_character_message(character_name: str):
     try:
         system_prompt, formatted_prompt = chat_manager.build_prompt_for_character(character_name)
 
-        # Generate an Interaction from LLM (async background)
+        # Call the LLM for an Interaction result (async background)
         interaction = await run.io_bound(
             llm_client.generate,
             prompt=formatted_prompt,
@@ -424,8 +422,19 @@ async def generate_character_message(character_name: str):
             use_cache=False
         )
 
+        # ----------- NEW CHECKS/LOGS ADDED HERE -----------
+        logger.debug(f"Raw interaction type: {type(interaction)}, value: {interaction}")
+
         if not interaction:
             logger.warning(f"No response for {character_name}. Not storing.")
+        elif not isinstance(interaction, Interaction):
+            # If we get a plain string or anything else, skip
+            logger.error(
+                f"Received invalid interaction type from LLM. "
+                f"Expected an Interaction object but got {type(interaction)}. Value: {interaction}"
+            )
+            # You can return here or keep going. We'll just return to avoid the crash.
+            return
         else:
             # Validate & possibly correct the interaction
             validated = await chat_manager.validate_and_possibly_correct_interaction(
@@ -457,6 +466,7 @@ async def generate_character_message(character_name: str):
                 logger.debug(f"Valid message stored for {character_name}: {final_interaction.dialogue}")
             else:
                 logger.warning(f"Interaction for {character_name} could not be validated or corrected. Not storing.")
+
     except Exception as e:
         logger.error(f"Error generating message for {character_name}: {e}")
         await notification_queue.put((f"Error generating message for {character_name}: {e}", 'error'))
