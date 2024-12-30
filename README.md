@@ -37,10 +37,10 @@ This repository contains a multi-persona chatbot application built with Python a
    Install required Python packages (for example, via `pip`):
    
    ```
-   pip install nicegui pydantic PyYAML requests
+   pip install -r requirements.txt
    ```
-   
-   (Adjust or extend packages as needed based on your environment.)
+
+   Make sure [Ollama](https://ollama.com/) is installed and the model referenced in llm_config.yaml is available.
 
 2. **Load or Provide Configuration**  
    - Place your character definition YAML files under `src/multipersona_chat_app/characters`.
