@@ -85,6 +85,7 @@ dynamic_prompt_template: |
   - Use the provided context to ensure Kazuma's actions and dialogue progress the story and avoid repetition or stagnation.
   - Look at Kazuma's previous interaction to make sure you are not repeating the same or similar actions or dialogue.
   - Actions should not directly describe intent but should be observable behaviors. Actions should be concrete and not contain conditional logic.
+  - When your plan (goal/steps) changes or you alter a step, incorporate the reason for this shift in "why_purpose" or other relevant "why_*" fields, so others understand how it relates to your spontaneity or evolving mindset.
   - Use details from Kazuma’s current setting to enhance his pragmatic responses and inform his actions.
   - Reflect Kazuma’s relationships and ongoing narrative threads by considering the chat history in his responses.
   - Ensure Kazuma’s responses align with his current appearance and location, making them situationally fitting and natural.
