@@ -7,7 +7,7 @@ from nicegui import ui, app, run
 import logging
 from typing import List, Dict
 from llm.ollama_client import OllamaClient
-from models.interaction import Interaction
+from models.interaction import Interaction, AppearanceSegments
 from models.character import Character
 from chats.chat_manager import ChatManager
 from utils import load_settings, get_available_characters
@@ -422,18 +422,15 @@ async def generate_character_message(character_name: str):
             use_cache=False
         )
 
-        # ----------- NEW CHECKS/LOGS ADDED HERE -----------
         logger.debug(f"Raw interaction type: {type(interaction)}, value: {interaction}")
 
         if not interaction:
             logger.warning(f"No response for {character_name}. Not storing.")
         elif not isinstance(interaction, Interaction):
-            # If we get a plain string or anything else, skip
             logger.error(
                 f"Received invalid interaction type from LLM. "
                 f"Expected an Interaction object but got {type(interaction)}. Value: {interaction}"
             )
-            # You can return here or keep going. We'll just return to avoid the crash.
             return
         else:
             # Validate & possibly correct the interaction
@@ -443,6 +440,17 @@ async def generate_character_message(character_name: str):
             if validated:
                 final_interaction = validated
                 formatted_message = f"*{final_interaction.action}*\n{final_interaction.dialogue}"
+                
+                # Extract and strip appearance subfields
+                if final_interaction.new_appearance:
+                    hair = final_interaction.new_appearance.hair.strip() if final_interaction.new_appearance.hair else ""
+                    clothing = final_interaction.new_appearance.clothing.strip() if final_interaction.new_appearance.clothing else ""
+                    accessories_and_held_items = final_interaction.new_appearance.accessories_and_held_items.strip() if final_interaction.new_appearance.accessories_and_held_items else ""
+                    posture_and_body_language = final_interaction.new_appearance.posture_and_body_language.strip() if final_interaction.new_appearance.posture_and_body_language else ""
+                    other_relevant_details = final_interaction.new_appearance.other_relevant_details.strip() if final_interaction.new_appearance.other_relevant_details else ""
+                else:
+                    hair = clothing = accessories_and_held_items = posture_and_body_language = other_relevant_details = None
+
                 msg_id = await chat_manager.add_message(
                     character_name,
                     formatted_message,
@@ -457,12 +465,26 @@ async def generate_character_message(character_name: str):
                     why_new_location=final_interaction.why_new_location,
                     why_new_appearance=final_interaction.why_new_appearance,
                     new_location=final_interaction.new_location.strip() if final_interaction.new_location.strip() else None,
-                    new_appearance=final_interaction.new_appearance.strip() if final_interaction.new_appearance.strip() else None
+                    new_appearance=final_interaction.new_appearance  # Pass the object as is
                 )
+
+                # Handle appearance subfields separately
                 if final_interaction.new_location.strip():
                     await chat_manager.handle_new_location_for_character(character_name, final_interaction.new_location, msg_id)
-                if final_interaction.new_appearance.strip():
-                    await chat_manager.handle_new_appearance_for_character(character_name, final_interaction.new_appearance, msg_id)
+                if final_interaction.new_appearance and any([
+                    hair, clothing, accessories_and_held_items, posture_and_body_language, other_relevant_details
+                ]):
+                    await chat_manager.handle_new_appearance_for_character(
+                        character_name,
+                        AppearanceSegments(
+                            hair=hair,
+                            clothing=clothing,
+                            accessories_and_held_items=accessories_and_held_items,
+                            posture_and_body_language=posture_and_body_language,
+                            other_relevant_details=other_relevant_details
+                        ),
+                        msg_id
+                    )
                 logger.debug(f"Valid message stored for {character_name}: {final_interaction.dialogue}")
             else:
                 logger.warning(f"Interaction for {character_name} could not be validated or corrected. Not storing.")

@@ -11,7 +11,7 @@ from templates import (
     CHARACTER_INTRODUCTION_SYSTEM_PROMPT_TEMPLATE,
     CharacterIntroductionOutput
 )
-from models.interaction import Interaction
+from models.interaction import Interaction, AppearanceSegments
 from pydantic import BaseModel, Field
 import json
 
@@ -224,10 +224,20 @@ class ChatManager:
                           why_new_location: Optional[str] = None,
                           why_new_appearance: Optional[str] = None,
                           new_location: Optional[str] = None,
-                          new_appearance: Optional[str] = None) -> Optional[int]:
-
+                          new_appearance: Optional[AppearanceSegments] = None
+                         ) -> Optional[int]:
+        """
+        new_appearance is now an AppearanceSegments object. We'll pass subfields to DB if present.
+        """
         if message_type == "system" or message.strip() == "...":
             return None
+
+        # Convert subfields of new_appearance to simple strings if not None
+        hair_val = (new_appearance.hair.strip() if new_appearance and new_appearance.hair else "")
+        cloth_val = (new_appearance.clothing.strip() if new_appearance and new_appearance.clothing else "")
+        acc_val = (new_appearance.accessories_and_held_items.strip() if new_appearance and new_appearance.accessories_and_held_items else "")
+        posture_val = (new_appearance.posture_and_body_language.strip() if new_appearance and new_appearance.posture_and_body_language else "")
+        other_val = (new_appearance.other_relevant_details.strip() if new_appearance and new_appearance.other_relevant_details else "")
 
         message_id = self.db.save_message(
             self.session_id,
@@ -244,7 +254,13 @@ class ChatManager:
             why_new_location,
             why_new_appearance,
             new_location,
-            new_appearance
+            # For backward compatibility, we won't fill a single "new_appearance" column.
+            # Instead, we pass the 5 new subfields:
+            hair_val,
+            cloth_val,
+            acc_val,
+            posture_val,
+            other_val
         )
 
         # Kick off summarization in the background
@@ -268,7 +284,6 @@ class ChatManager:
         system_prompt = existing_prompts['character_system_prompt']
         dynamic_prompt_template = existing_prompts['dynamic_prompt_template']
 
-        # We only retrieve messages as dictionaries here
         visible_history = self.get_visible_history()
         recent_msgs = visible_history[-self.recent_dialogue_lines:]
 
@@ -298,7 +313,6 @@ class ChatManager:
         location = self.get_combined_location()
         current_appearance = self.db.get_character_appearance(self.session_id, character_name)
 
-        # Insert the existing plan
         plan_obj = self.get_character_plan(character_name)
         steps_text = "\n".join(f"- {s}" for s in plan_obj.steps)
         plan_text = f"Goal: {plan_obj.goal}\nSteps:\n{steps_text}"
@@ -328,14 +342,12 @@ class ChatManager:
             appearance=char.appearance,
         )
 
-        # Again, retrieve only message dictionaries
         visible_history = self.get_visible_history()
         latest_dialogue = visible_history[-1]['message'] if visible_history else ""
         
         if latest_dialogue:
             latest_dialogue = f"### Latest Dialogue Line:\n{latest_dialogue}"
 
-        # Grab character-specific summaries
         all_summaries = self.db.get_all_summaries(self.session_id, character_name)
         chat_history_summary = "\n\n".join(all_summaries) if all_summaries else ""
 
@@ -471,11 +483,9 @@ class ChatManager:
             if mid > max_message_id_in_chunk:
                 max_message_id_in_chunk = mid
 
-            # Incorporate 'why_*' fields for the character’s own messages 
             if sender == character_name:
                 line_parts = [f"{sender}:"]
                 line_parts.append(f"(Affect={affect}, Purpose={purpose})")
-                # Include the reasoning fields if present
                 if why_purpose: 
                     line_parts.append(f"why_purpose={why_purpose}")
                 if why_affect:
@@ -492,12 +502,10 @@ class ChatManager:
                 line_parts.append(f"Message={message}")
                 line = " | ".join(line_parts)
             else:
-                # Other speakers
                 line = f"{sender}: {message}"
 
             history_lines.append(line)
 
-        # Add plan-change notes in this summarization chunk
         plan_changes_notes = []
         plan_changes = self.db.get_plan_changes_for_range(
             self.session_id,
@@ -512,7 +520,7 @@ class ChatManager:
         plan_changes_text = ""
         if plan_changes_notes:
             plan_changes_text = (
-                "\n\nAdditionally, the following plan changes occurred (with possible reasons in 'why_*' fields above):\n"
+                "\n\nAdditionally, the following plan changes occurred:\n"
                 + "\n".join(plan_changes_notes)
             )
 
@@ -542,7 +550,6 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
 
         self.db.save_new_summary(self.session_id, character_name, new_summary, covered_up_to_message_id)
 
-        # Hide old messages from the visible log, except for recent_dialogue_lines
         to_hide_ids = [m[0] for m in to_summarize]
         if len(to_hide_ids) > self.recent_dialogue_lines:
             ids_to_hide = to_hide_ids[:-self.recent_dialogue_lines]
@@ -587,7 +594,10 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
         if updated:
             logger.info(f"Character '{character_name}' moved/updated location to '{new_location}'.")
 
-    async def handle_new_appearance_for_character(self, character_name: str, new_appearance: str, triggered_message_id: int):
+    async def handle_new_appearance_for_character(self, character_name: str, new_appearance: AppearanceSegments, triggered_message_id: int):
+        """
+        Update each subfield in DB if it's non-empty, merging with old data if needed.
+        """
         updated = self.db.update_character_appearance(
             self.session_id,
             character_name,
@@ -595,13 +605,9 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
             triggered_by_message_id=triggered_message_id
         )
         if updated:
-            logger.info(f"Character '{character_name}' updated appearance to '{new_appearance}'.")
+            logger.info(f"Character '{character_name}' updated appearance subfields: {new_appearance.dict()}")
 
     def get_all_visible_messages(self) -> List[Dict]:
-        """
-        Return only the visible messages as a list of dictionaries.
-        (Removed summary strings to avoid mixing dicts and strings.)
-        """
         visible_msgs = self.db.get_messages(self.session_id)
         return [m for m in visible_msgs if m["visible"]]
     
@@ -612,12 +618,7 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
         dynamic_prompt: str,
         initial_interaction: Interaction
     ) -> Optional[Interaction]:
-        """
-        Validates (and if needed corrects) the given interaction to ensure
-        it conforms to prompts. Returns a valid Interaction or None if it cannot be validated.
-        """
         if self.validation_loop_setting == 0:
-            # Even if we skip validation, still update plan
             await self.update_character_plan(character_name)
             return initial_interaction
 
@@ -658,7 +659,13 @@ Please reply in valid JSON format with the following fields:
       "why_dialogue": "...",
       "new_location": "...",
       "why_new_location": "...",
-      "new_appearance": "...",
+      "new_appearance": {{
+         "hair": "...",
+         "clothing": "...",
+         "accessories_and_held_items": "...",
+         "posture_and_body_language": "...",
+         "other_relevant_details": "..."
+      }},
       "why_new_appearance": "..."
   }}
 }}
@@ -666,10 +673,8 @@ Please reply in valid JSON format with the following fields:
 - If is_valid is "no", provide a corrected_interaction with valid fields.
 
 Only produce valid JSON with these two top-level keys: "is_valid" and "corrected_interaction". 
-Include all fields in "corrected_interaction" if is_valid="no".
 """
 
-            # Call the LLM in a thread
             result = await asyncio.to_thread(
                 validation_client.generate,
                 prompt=validation_prompt,
@@ -718,18 +723,9 @@ Include all fields in "corrected_interaction" if is_valid="no".
                 logger.warning("Reached validation iteration limit without achieving 'is_valid=yes'.")
                 return None
         
-        # Not reached normally
         return None
 
-    #
-    # CHANGE: 'update_character_plan' now compares old vs. new plan, generates a textual "change summary,"
-    #         and stores it along with the message ID that triggered the change.
-    #
     async def update_character_plan(self, character_name: str, triggered_message_id: Optional[int] = None):
-        """
-        Revise or confirm the existing plan for the given character based on the latest context.
-        If the plan changes, store the new plan and a short summary describing what's different and why.
-        """
         plan_client = OllamaClient(
             config_path='src/multipersona_chat_app/config/llm_config.yaml',
             output_model=CharacterPlan
@@ -862,8 +858,9 @@ If no changes are needed, repeat the existing plan in the specified JSON format.
 
             if isinstance(introduction_response, CharacterIntroductionOutput):
                 intro_text = introduction_response.introduction_text.strip()
-                appearance = introduction_response.current_appearance.strip()
-                location = introduction_response.current_location.strip()
+                # We'll store the five subfields
+                app_seg = introduction_response.current_appearance
+                loc = introduction_response.current_location.strip()
 
                 logger.info(f"Introduction generated for {character_name}. Text: {intro_text}")
 
@@ -874,10 +871,19 @@ If no changes are needed, repeat the existing plan in the specified JSON format.
                     message_type="character"
                 )
 
-                if appearance:
-                    await self.handle_new_appearance_for_character(character_name, appearance, msg_id)
-                if location:
-                    await self.handle_new_location_for_character(character_name, location, msg_id)
+                # If there is a location, handle it
+                if loc:
+                    await self.handle_new_location_for_character(character_name, loc, msg_id)
+
+                # Convert to AppearanceSegments for DB
+                new_app_segments = AppearanceSegments(
+                    hair=app_seg.hair,
+                    clothing=app_seg.clothing,
+                    accessories_and_held_items=app_seg.accessories_and_held_items,
+                    posture_and_body_language=app_seg.posture_and_body_language,
+                    other_relevant_details=app_seg.other_relevant_details
+                )
+                await self.handle_new_appearance_for_character(character_name, new_app_segments, msg_id)
 
                 logger.info(f"Saved introduction message for {character_name}")
             else:
@@ -889,4 +895,3 @@ If no changes are needed, repeat the existing plan in the specified JSON format.
 
         # Now generate the initial plan
         await self.update_character_plan(character_name, triggered_message_id=None)
-

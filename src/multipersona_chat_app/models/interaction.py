@@ -1,4 +1,18 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Optional
+
+
+class AppearanceSegments(BaseModel):
+    """
+    Holds the five detailed subfields describing the appearance.
+    Each field is optional; empty means no changes.
+    """
+    hair: Optional[str] = ""
+    clothing: Optional[str] = ""
+    accessories_and_held_items: Optional[str] = ""
+    posture_and_body_language: Optional[str] = ""
+    other_relevant_details: Optional[str] = ""
+
 
 class Interaction(BaseModel):
     purpose: str        # Short-term goal or current mindset
@@ -11,7 +25,7 @@ class Interaction(BaseModel):
     why_dialogue: str   # Why these words (or silence) were chosen
     new_location: str   # This character's personal location change (if any)
     why_new_location: str
-    new_appearance: str   # New or changed appearance if any
+    new_appearance: AppearanceSegments
     why_new_appearance: str
 
     def format(self) -> str:
@@ -27,6 +41,6 @@ class Interaction(BaseModel):
             f"Why Dialogue: {self.why_dialogue if self.why_dialogue else 'None'}\n"
             f"New Location: {self.new_location if self.new_location else 'None'}\n"
             f"Why New Location: {self.why_new_location if self.why_new_location else 'None'}\n"
-            f"New Appearance: {self.new_appearance if self.new_appearance else 'None'}\n"
+            f"New Appearance: {self.new_appearance.model_dump() if self.new_appearance else 'None'}\n"
             f"Why New Appearance: {self.why_new_appearance if self.why_new_appearance else 'None'}\n"
         )

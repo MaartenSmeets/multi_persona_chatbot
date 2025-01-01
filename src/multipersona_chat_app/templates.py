@@ -1,9 +1,21 @@
 from pydantic import BaseModel
+from typing import Optional
+
+#
+# New model to hold five appearance subfields for the introduction
+#
+class IntroductionAppearanceSegments(BaseModel):
+    hair: Optional[str] = ""
+    clothing: Optional[str] = ""
+    accessories_and_held_items: Optional[str] = ""
+    posture_and_body_language: Optional[str] = ""
+    other_relevant_details: Optional[str] = ""
 
 class CharacterIntroductionOutput(BaseModel):
-    introduction_text: str          # Free-form introduction text for the character
-    current_appearance: str         # Description of the character's current appearance
-    current_location: str           # Description of the character's current location
+    introduction_text: str  # Free-form introduction text for the character
+    # Now store the current appearance as an object with five subfields
+    current_appearance: IntroductionAppearanceSegments
+    current_location: str
 
 INTRODUCTION_TEMPLATE = r"""You are {character_name}. Introduce yourself in a detailed and immersive manner, focusing exclusively on what is visible to others:
 
@@ -20,19 +32,11 @@ INTRODUCTION_TEMPLATE = r"""You are {character_name}. Introduce yourself in a de
 Provide a comprehensive and elaborate description of your current state, encompassing:
 
 - **Appearance:**
-  - **Physical Traits:** Offer a detailed description of facial features, hairstyle and color, eye color, skin tone, and any distinguishing marks or features.
-  - **Clothing:** Describe your outfit with specific details about style, color, texture, accessories, and how the clothing fits or moves. **Ensure that your attire is appropriate for the current setting and location, reflecting the environmental and cultural context.**
-  - **Accessories:** Detail any jewelry, hats, glasses, or other accessories, including their appearance and placement.
-  - **Environmental Effects:** Mention any changes in appearance due to environmental factors such as weather, lighting, or physical activity (e.g., damp clothes from rain, a sheen of sweat, smudges of dirt).
-
-- **Physical Stance:**
-  - **Posture:** Explain how you are standing or sitting, including any notable body language cues.
-  - **Gestures:** Describe any movements or gestures that are part of your current state.
-  - **Facial Expressions:** Depict your facial expressions that convey your mood or personality without words.
-
-- **Subtle Personality Traits:**
-  - **Non-Verbal Cues:** Include small details that hint at your personality, such as habitual movements, nervous ticks, or confident stances.
-  - **Presence:** Convey the overall impression you give to others through your appearance and body language.
+  - **Hair:** Style, condition, interaction with environment or activity.
+  - **Clothing:** Outfit details, style, color, texture, and any environmental effects.
+  - **Accessories and Held Items:** Bracelets, hats, glasses, handheld objects, etc.
+  - **Posture and Body Language:** How you stand, sit, move, or gesture.
+  - **Other Relevant Details:** Facial expressions, skin details (makeup, injuries, marks), or anything else visible.
 """
 
 CHARACTER_INTRODUCTION_SYSTEM_PROMPT_TEMPLATE = r"""
@@ -52,8 +56,7 @@ You are {character_name}.
 - **Do not include dialogue** or interactions unless explicitly required by the context.
 - **Offer exhaustive descriptions** covering every visible aspect of appearance and location:
   - **Appearance:**
-    - Detail physical traits, clothing, accessories, and any environmental effects impacting appearance.
-    - **Clothing should be contextually relevant,** considering the provided setting and location.
+    - Detail hair, clothing, accessories & held items, posture/body language, and any other relevant details.
   - **Location:**
     - Describe the surroundings, spatial details, and atmospheric elements thoroughly.
 - **Maintain consistency** with your established traits and background.
@@ -62,8 +65,9 @@ You are {character_name}.
 
 ## Output Requirements ##
 - **Generate a structured JSON object** with the fields "introduction_text", "current_appearance", and "current_location".
+- The "current_appearance" field must be an object with the keys "hair", "clothing", "accessories_and_held_items", "posture_and_body_language", and "other_relevant_details".
 - **Ensure all fields are thoroughly and accurately filled** based on the character's attributes and the current context.
-- **Verify completeness:** Make sure every aspect of appearance and location is fully described without omissions, and an "introduction_text" is provided.
+- **Verify completeness**: The introduction_text and each appearance subfield must meaningfully describe the character's current state.
 - **Maintain a clear and logical flow** in the descriptions to facilitate easy visualization by the reader.
 - **Avoid repetition** by ensuring each detail is unique and contributes to the overall immersive portrayal.
 
@@ -78,9 +82,13 @@ Produce a JSON object with the following fields:
 
 {{
   "introduction_text": "<Your detailed introduction here>",
-  "current_appearance": "<Comprehensive description of your current appearance, covering all aspects>",
-  "current_location": "<Thorough description of where the character is currently located, covering all aspects>"
+  "current_appearance": {{
+    "hair": "<...>",
+    "clothing": "<...>",
+    "accessories_and_held_items": "<...>",
+    "posture_and_body_language": "<...>",
+    "other_relevant_details": "<...>"
+  }},
+  "current_location": "<Thorough detailed description of the current location the character is at>"
 }}
 """
-
-

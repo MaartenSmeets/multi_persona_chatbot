@@ -1,28 +1,30 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/db/db_manager.py
-
 import sqlite3
 import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import json
+from models.interaction import AppearanceSegments
 
 logger = logging.getLogger(__name__)
 
+
 def merge_location_update(old_location: str, new_location: str) -> str:
     """
-    If new_location is empty, keep old. If not empty, replace with the new location.
+    If new_location is empty, keep old. If not empty, replace with new_location.
     """
     if not new_location.strip():
         return old_location
     return new_location
 
-def merge_appearance_update(old_appearance: str, new_appearance: str) -> str:
+
+def merge_appearance_subfield(old_val: str, new_val: str) -> str:
     """
-    If new_appearance is empty, keep old. If not empty, replace with new.
+    If new_val is empty, keep old_val. Otherwise, use new_val.
     """
-    if not new_appearance.strip():
-        return old_appearance
-    return new_appearance
+    if not new_val.strip():
+        return old_val
+    return new_val
+
 
 class DBManager:
     def __init__(self, db_path: str):
@@ -46,7 +48,7 @@ class DBManager:
             )
         ''')
 
-        # Create messages table (with columns for why_*, new_location, new_appearance)
+        # Create messages table
         c.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,13 +69,19 @@ class DBManager:
                 why_new_appearance TEXT,
 
                 new_location TEXT,
-                new_appearance TEXT,
+
+                -- Each new_appearance subfield is stored in a separate column:
+                hair TEXT,
+                clothing TEXT,
+                accessories_and_held_items TEXT,
+                posture_and_body_language TEXT,
+                other_relevant_details TEXT,
 
                 FOREIGN KEY(session_id) REFERENCES sessions(session_id)
             )
         ''')
 
-        # Add columns if they do not exist:
+        # Add columns if they do not exist
         columns_to_add = [
             ("why_purpose", "TEXT"),
             ("why_affect", "TEXT"),
@@ -82,7 +90,11 @@ class DBManager:
             ("why_new_location", "TEXT"),
             ("why_new_appearance", "TEXT"),
             ("new_location", "TEXT"),
-            ("new_appearance", "TEXT"),
+            ("hair", "TEXT"),
+            ("clothing", "TEXT"),
+            ("accessories_and_held_items", "TEXT"),
+            ("posture_and_body_language", "TEXT"),
+            ("other_relevant_details", "TEXT"),
         ]
         for col, ctype in columns_to_add:
             try:
@@ -116,22 +128,31 @@ class DBManager:
             )
         ''')
 
-        # Create session_characters table (and ensure current_appearance column)
+        # Create session_characters table
         c.execute('''
             CREATE TABLE IF NOT EXISTS session_characters (
                 session_id TEXT NOT NULL,
                 character_name TEXT NOT NULL,
                 current_location TEXT,
-                current_appearance TEXT,
+                current_appearance TEXT, -- We keep this for backward compatibility / single text
                 FOREIGN KEY(session_id) REFERENCES sessions(session_id),
                 PRIMARY KEY (session_id, character_name)
             )
         ''')
-        try:
-            c.execute("ALTER TABLE session_characters ADD COLUMN current_appearance TEXT")
-            logger.info("Added column 'current_appearance' to 'session_characters' table.")
-        except sqlite3.OperationalError:
-            logger.debug("Column 'current_appearance' already exists in 'session_characters' table. Skipping.")
+        # We need separate columns for each subfield of appearance
+        subfields_to_add = [
+            ("hair", "TEXT"),
+            ("clothing", "TEXT"),
+            ("accessories_and_held_items", "TEXT"),
+            ("posture_and_body_language", "TEXT"),
+            ("other_relevant_details", "TEXT"),
+        ]
+        for col, ctype in subfields_to_add:
+            try:
+                c.execute(f"ALTER TABLE session_characters ADD COLUMN {col} {ctype}")
+                logger.info(f"Added column '{col}' to 'session_characters' table.")
+            except sqlite3.OperationalError:
+                logger.debug(f"Column '{col}' already exists in 'session_characters' table. Skipping.")
 
         # Create appearance_history table
         c.execute('''
@@ -139,13 +160,33 @@ class DBManager:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT NOT NULL,
                 character_name TEXT NOT NULL,
-                appearance TEXT NOT NULL,
+
+                hair TEXT,
+                clothing TEXT,
+                accessories_and_held_items TEXT,
+                posture_and_body_language TEXT,
+                other_relevant_details TEXT,
+
                 changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 triggered_by_message_id INTEGER,
                 FOREIGN KEY(session_id) REFERENCES sessions(session_id),
                 FOREIGN KEY(triggered_by_message_id) REFERENCES messages(id)
             )
         ''')
+        # Add columns if they do not exist
+        appearance_cols = [
+            ("hair", "TEXT"),
+            ("clothing", "TEXT"),
+            ("accessories_and_held_items", "TEXT"),
+            ("posture_and_body_language", "TEXT"),
+            ("other_relevant_details", "TEXT"),
+        ]
+        for col, ctype in appearance_cols:
+            try:
+                c.execute(f"ALTER TABLE appearance_history ADD COLUMN {col} {ctype}")
+                logger.info(f"Added column '{col}' to 'appearance_history' table.")
+            except sqlite3.OperationalError:
+                logger.debug(f"Column '{col}' already exists in 'appearance_history' table. Skipping.")
 
         # Create character_prompts table
         c.execute('''
@@ -160,9 +201,7 @@ class DBManager:
             )
         ''')
 
-        #
-        # Character Plans (goal + steps)
-        #
+        # Create character_plans table
         c.execute('''
             CREATE TABLE IF NOT EXISTS character_plans (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -176,7 +215,7 @@ class DBManager:
             )
         ''')
 
-        # NEW: History table for plan changes, extended with triggered_by_message_id and a textual change_summary
+        # Create character_plans_history table
         c.execute('''
             CREATE TABLE IF NOT EXISTS character_plans_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -192,7 +231,7 @@ class DBManager:
             )
         ''')
 
-        # Add columns to character_plans_history if they do not exist (to support updates)
+        # Add columns to character_plans_history if they do not exist
         history_columns = [
             ("triggered_by_message_id", "INTEGER"),
             ("change_summary", "TEXT"),
@@ -206,7 +245,7 @@ class DBManager:
 
         conn.commit()
         conn.close()
-        logger.info("Database initialized with required tables (including character_plans and character_plans_history).")
+        logger.info("Database initialized with required tables (including new columns for segmented appearance).")
 
     # Session Management
     def create_session(self, session_id: str, name: str):
@@ -359,17 +398,42 @@ class DBManager:
         return ""
 
     def get_character_appearance(self, session_id: str, character_name: str) -> str:
+        """
+        Returns a textual summary of the subfields plus the old current_appearance field
+        for backward compatibility. 
+        """
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
-            SELECT current_appearance
+            SELECT current_appearance, hair, clothing, accessories_and_held_items, posture_and_body_language, other_relevant_details
             FROM session_characters
             WHERE session_id = ? AND character_name = ?
         ''', (session_id, character_name))
         row = c.fetchone()
         conn.close()
-        if row and row[0]:
-            return row[0]
+        if row:
+            legacy_app = row[0] or ""
+            hair = row[1] or ""
+            cloth = row[2] or ""
+            acc = row[3] or ""
+            posture = row[4] or ""
+            other = row[5] or ""
+            # Combine for a quick textual summary:
+            combined = []
+            if hair.strip():
+                combined.append(f"Hair: {hair}")
+            if cloth.strip():
+                combined.append(f"Clothing: {cloth}")
+            if acc.strip():
+                combined.append(f"Accessories/Held Items: {acc}")
+            if posture.strip():
+                combined.append(f"Posture/Body Language: {posture}")
+            if other.strip():
+                combined.append(f"Other Details: {other}")
+            if not combined:
+                # fallback to legacy
+                return legacy_app
+            return " | ".join(combined)
         return ""
 
     def get_all_character_locations(self, session_id: str) -> Dict[str, str]:
@@ -385,16 +449,44 @@ class DBManager:
         return {row[0]: (row[1] if row[1] else "") for row in rows}
 
     def get_all_character_appearances(self, session_id: str) -> Dict[str, str]:
+        """
+        For each character, we do a short textual summary of the subfields.
+        """
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
-            SELECT character_name, current_appearance
+            SELECT character_name, current_appearance, hair, clothing, accessories_and_held_items, posture_and_body_language, other_relevant_details
             FROM session_characters
             WHERE session_id = ?
         ''', (session_id,))
         rows = c.fetchall()
         conn.close()
-        return {row[0]: (row[1] if row[1] else "") for row in rows}
+
+        results = {}
+        for row in rows:
+            c_name = row[0]
+            legacy_app = row[1] or ""
+            hair = row[2] or ""
+            cloth = row[3] or ""
+            acc = row[4] or ""
+            posture = row[5] or ""
+            other = row[6] or ""
+            combined = []
+            if hair.strip():
+                combined.append(f"Hair: {hair}")
+            if cloth.strip():
+                combined.append(f"Clothing: {cloth}")
+            if acc.strip():
+                combined.append(f"Accessories/Held Items: {acc}")
+            if posture.strip():
+                combined.append(f"Posture/Body: {posture}")
+            if other.strip():
+                combined.append(f"Other: {other}")
+            if not combined:
+                results[c_name] = legacy_app
+            else:
+                results[c_name] = " | ".join(combined)
+        return results
 
     def update_character_location(self, session_id: str, character_name: str, new_location: str, triggered_by_message_id: Optional[int] = None) -> bool:
         old_location = self.get_character_location(session_id, character_name)
@@ -402,7 +494,7 @@ class DBManager:
 
         if updated_location == old_location:
             logger.debug(f"No location change for character '{character_name}' in session '{session_id}'.")
-            return False  # No update needed
+            return False
 
         conn = self._ensure_connection()
         c = conn.cursor()
@@ -423,76 +515,134 @@ class DBManager:
             conn = self._ensure_connection()
             c = conn.cursor()
             c.execute('INSERT INTO location_history (session_id, location, triggered_by_message_id) VALUES (?, ?, ?)',
-                      (session_id, f"{updated_location}", triggered_by_message_id))
+                      (session_id, updated_location, triggered_by_message_id))
             conn.commit()
             conn.close()
 
-        return True  # Update occurred
+        return True
 
-    def update_character_appearance(self, session_id: str, character_name: str, new_appearance: str, triggered_by_message_id: Optional[int] = None) -> bool:
-        old_appearance = self.get_character_appearance(session_id, character_name)
-        updated_appearance = merge_appearance_update(old_appearance, new_appearance)
+    def update_character_appearance(self, session_id: str, character_name: str, new_appearance: AppearanceSegments, triggered_by_message_id: Optional[int] = None) -> bool:
+        """
+        Merge each subfield. If new_appearance has something, replace old.
+        Then store in session_characters. Also store in appearance_history if changed.
+        """
+        # 1) get old subfields
+        conn = self._ensure_connection()
+        c = conn.cursor()
+        c.execute('''
+            SELECT hair, clothing, accessories_and_held_items, posture_and_body_language, other_relevant_details
+            FROM session_characters
+            WHERE session_id = ? AND character_name = ?
+        ''', (session_id, character_name))
+        row = c.fetchone()
+        if not row:
+            conn.close()
+            logger.warning(f"No row found in session_characters for '{character_name}' in session '{session_id}'.")
+            return False
+        old_hair, old_cloth, old_acc, old_posture, old_other = row
+        conn.close()
 
-        if updated_appearance == old_appearance:
-            logger.debug(f"No appearance change for character '{character_name}' in session '{session_id}'.")
-            return False  # No update needed
+        # 2) merge
+        merged_hair = merge_appearance_subfield(old_hair or "", new_appearance.hair or "")
+        merged_cloth = merge_appearance_subfield(old_cloth or "", new_appearance.clothing or "")
+        merged_acc = merge_appearance_subfield(old_acc or "", new_appearance.accessories_and_held_items or "")
+        merged_posture = merge_appearance_subfield(old_posture or "", new_appearance.posture_and_body_language or "")
+        merged_other = merge_appearance_subfield(old_other or "", new_appearance.other_relevant_details or "")
 
+        if (
+            merged_hair == (old_hair or "") and
+            merged_cloth == (old_cloth or "") and
+            merged_acc == (old_acc or "") and
+            merged_posture == (old_posture or "") and
+            merged_other == (old_other or "")
+        ):
+            logger.debug(f"No appearance change for '{character_name}' in session '{session_id}'.")
+            return False
+
+        # 3) update session_characters
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
             UPDATE session_characters
-            SET current_appearance = ?
+            SET hair = ?, clothing = ?, accessories_and_held_items = ?, 
+                posture_and_body_language = ?, other_relevant_details = ?
             WHERE session_id = ? AND character_name = ?
-        ''', (updated_appearance, session_id, character_name))
+        ''', (
+            merged_hair,
+            merged_cloth,
+            merged_acc,
+            merged_posture,
+            merged_other,
+            session_id,
+            character_name
+        ))
         conn.commit()
         conn.close()
 
         logger.info(
-            f"Updated appearance of character '{character_name}' in session '{session_id}' "
-            f"from '{old_appearance}' to '{updated_appearance}'."
+            f"Updated appearance of character '{character_name}' in session '{session_id}'."
         )
 
-        if triggered_by_message_id:
-            # Also record in appearance_history
-            conn = self._ensure_connection()
-            c = conn.cursor()
-            c.execute('''
-                INSERT INTO appearance_history (session_id, character_name, appearance, triggered_by_message_id)
-                VALUES (?, ?, ?, ?)
-            ''', (session_id, character_name, updated_appearance, triggered_by_message_id))
-            conn.commit()
-            conn.close()
+        # 4) insert into appearance_history
+        conn = self._ensure_connection()
+        c = conn.cursor()
+        c.execute('''
+            INSERT INTO appearance_history (
+                session_id, character_name,
+                hair, clothing, accessories_and_held_items, 
+                posture_and_body_language, other_relevant_details,
+                triggered_by_message_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            session_id,
+            character_name,
+            merged_hair,
+            merged_cloth,
+            merged_acc,
+            merged_posture,
+            merged_other,
+            triggered_by_message_id
+        ))
+        conn.commit()
+        conn.close()
 
-        return True  # Update occurred
+        return True
 
     # Messages
     def save_message(self,
                      session_id: str,
                      sender: str,
                      message: str,
-                     visible: bool = True,
-                     message_type: str = "user",
-                     affect: Optional[str] = None,
-                     purpose: Optional[str] = None,
-                     why_purpose: Optional[str] = None,
-                     why_affect: Optional[str] = None,
-                     why_action: Optional[str] = None,
-                     why_dialogue: Optional[str] = None,
-                     why_new_location: Optional[str] = None,
-                     why_new_appearance: Optional[str] = None,
-                     new_location: Optional[str] = None,
-                     new_appearance: Optional[str] = None) -> int:
+                     visible: bool,
+                     message_type: str,
+                     affect: Optional[str],
+                     purpose: Optional[str],
+                     why_purpose: Optional[str],
+                     why_affect: Optional[str],
+                     why_action: Optional[str],
+                     why_dialogue: Optional[str],
+                     why_new_location: Optional[str],
+                     why_new_appearance: Optional[str],
+                     new_location: Optional[str],
+                     hair: Optional[str],
+                     clothing: Optional[str],
+                     accessories_and_held_items: Optional[str],
+                     posture_and_body_language: Optional[str],
+                     other_relevant_details: Optional[str]
+                    ) -> int:
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
             INSERT INTO messages (
                 session_id, sender, message, visible, message_type,
                 affect, purpose,
-                why_purpose, why_affect, why_action, why_dialogue, 
+                why_purpose, why_affect, why_action, why_dialogue,
                 why_new_location, why_new_appearance,
-                new_location, new_appearance
+                new_location,
+                hair, clothing, accessories_and_held_items, posture_and_body_language, other_relevant_details
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             session_id,
             sender,
@@ -508,7 +658,11 @@ class DBManager:
             why_new_location,
             why_new_appearance,
             new_location,
-            new_appearance
+            hair,
+            clothing,
+            accessories_and_held_items,
+            posture_and_body_language,
+            other_relevant_details
         ))
         message_id = c.lastrowid
         conn.commit()
@@ -525,7 +679,8 @@ class DBManager:
                 affect, purpose, created_at,
                 why_purpose, why_affect, why_action, why_dialogue,
                 why_new_location, why_new_appearance,
-                new_location, new_appearance
+                new_location,
+                hair, clothing, accessories_and_held_items, posture_and_body_language, other_relevant_details
             FROM messages
             WHERE session_id = ?
             ORDER BY id ASC
@@ -549,7 +704,11 @@ class DBManager:
                 'why_new_location': row[12],
                 'why_new_appearance': row[13],
                 'new_location': row[14],
-                'new_appearance': row[15],
+                'hair': row[15],
+                'clothing': row[16],
+                'accessories_and_held_items': row[17],
+                'posture_and_body_language': row[18],
+                'other_relevant_details': row[19],
             })
         conn.close()
         logger.debug(f"Retrieved {len(messages)} messages for session '{session_id}'.")
@@ -610,7 +769,6 @@ class DBManager:
 
     # Character Prompts
     def get_character_prompts(self, session_id: str, character_name: str) -> Optional[Dict[str, str]]:
-        """Fetches the stored character_system_prompt and dynamic_prompt_template for this character in this session."""
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
@@ -630,7 +788,6 @@ class DBManager:
         return None
 
     def save_character_prompts(self, session_id: str, character_name: str, character_system_prompt: str, dynamic_prompt_template: str):
-        """Inserts or replaces the character prompts for a given (session, character)."""
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
@@ -645,7 +802,7 @@ class DBManager:
         logger.info(f"Stored character_system_prompt and dynamic_prompt_template for character '{character_name}' in session '{session_id}'.")
 
     #
-    # UPDATED: Character Plans (goal + steps as a list), plus history with triggered_by_message_id and change_summary
+    # Character Plans (goal + steps as a list)
     #
     def get_character_plan(self, session_id: str, character_name: str) -> Optional[Dict[str, Any]]:
         conn = self._ensure_connection()
@@ -675,7 +832,6 @@ class DBManager:
         return None
 
     def save_character_plan(self, session_id: str, character_name: str, goal: str, steps: List[str]):
-        # This function is used if you just want to directly store goal/steps without history explanation
         steps_str = json.dumps(steps)
         conn = self._ensure_connection()
         c = conn.cursor()
@@ -700,15 +856,10 @@ class DBManager:
         triggered_by_message_id: Optional[int],
         change_summary: str
     ):
-        """
-        Save new plan in the main table and also log it in the plan history table with a summary
-        of changes and the message that caused it.
-        """
         steps_str = json.dumps(steps)
         conn = self._ensure_connection()
         c = conn.cursor()
 
-        # Upsert into character_plans
         c.execute('''
             INSERT INTO character_plans (session_id, character_name, goal, steps)
             VALUES (?, ?, ?, ?)
@@ -718,7 +869,6 @@ class DBManager:
                           updated_at=CURRENT_TIMESTAMP
         ''', (session_id, character_name, goal, steps_str))
 
-        # Insert into plan history with the plan changes
         c.execute('''
             INSERT INTO character_plans_history (session_id, character_name, goal, steps, triggered_by_message_id, change_summary)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -739,9 +889,6 @@ class DBManager:
         )
 
     def get_plan_changes_for_range(self, session_id: str, character_name: str, after_message_id: int, up_to_message_id: int) -> List[Dict[str, Any]]:
-        """
-        Retrieve plan changes triggered by messages with ID in (after_message_id, up_to_message_id].
-        """
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
@@ -764,4 +911,3 @@ class DBManager:
                 "change_summary": row[1]
             })
         return results
-
