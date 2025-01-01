@@ -350,10 +350,13 @@ async def automatic_conversation():
         logger.debug("Automatic conversation active. Generating next message.")
         next_char = chat_manager.next_speaker()
         if next_char:
-            await generate_character_message(next_char)
+            # Generate next character message, which also triggers plan updates
+            await chat_manager.generate_character_message(next_char)
             chat_manager.advance_turn()
             update_next_speaker_label()
             show_character_details.refresh()
+            # ADD this line so new messages appear:
+            show_chat_display.refresh()
 
 async def next_character_response():
     if chat_manager.automatic_running:
@@ -362,144 +365,13 @@ async def next_character_response():
     next_char = chat_manager.next_speaker()
     if next_char:
         logger.info(f"Generating response for character: {next_char}")
-        await generate_character_message(next_char)
+        # Generate next character message, which also triggers plan updates
+        await chat_manager.generate_character_message(next_char)
         chat_manager.advance_turn()
         update_next_speaker_label()
         show_character_details.refresh()
-
-async def generate_character_introduction_message(character_name: str):
-    global llm_busy
-    llm_busy = True
-    llm_status_label.text = f"Generating introduction for {character_name}..."
-    llm_status_label.visible = True
-    llm_status_label.update()
-
-    try:
-        logger.info(f"Building introduction for character: {character_name}")
-        await chat_manager.generate_character_introduction_message(character_name)
-    except Exception as e:
-        logger.error(f"Error generating introduction for {character_name}: {e}", exc_info=True)
-        await notification_queue.put((f"Error generating introduction for {character_name}: {e}", 'error'))
-
-    llm_busy = False
-    llm_status_label.text = ""
-    llm_status_label.visible = False
-    llm_status_label.update()
-
-    show_chat_display.refresh()
-    show_character_details.refresh()
-
-async def generate_character_message(character_name: str):
-    global llm_busy
-    logger.info(f"Generating message for character: {character_name}")
-
-    llm_busy = True
-    llm_status_label.text = f"Generating next message for {character_name}..."
-    llm_status_label.visible = True
-    llm_status_label.update()
-
-    # If character hasn't introduced themselves yet, do that first
-    char_spoken_before = any(
-        m for m in chat_manager.db.get_messages(chat_manager.session_id)
-        if m["sender"] == character_name and m["message_type"] == "character"
-    )
-    if not char_spoken_before:
-        await generate_character_introduction_message(character_name)
-        llm_busy = False
-        llm_status_label.text = ""
-        llm_status_label.visible = False
-        llm_status_label.update()
-        return
-
-    try:
-        system_prompt, formatted_prompt = chat_manager.build_prompt_for_character(character_name)
-
-        # Call the LLM for an Interaction result (async background)
-        interaction = await run.io_bound(
-            llm_client.generate,
-            prompt=formatted_prompt,
-            system=system_prompt,
-            use_cache=False
-        )
-
-        logger.debug(f"Raw interaction type: {type(interaction)}, value: {interaction}")
-
-        if not interaction:
-            logger.warning(f"No response for {character_name}. Not storing.")
-        elif not isinstance(interaction, Interaction):
-            logger.error(
-                f"Received invalid interaction type from LLM. "
-                f"Expected an Interaction object but got {type(interaction)}. Value: {interaction}"
-            )
-            return
-        else:
-            # Validate & possibly correct the interaction
-            validated = await chat_manager.validate_and_possibly_correct_interaction(
-                character_name, system_prompt, formatted_prompt, interaction
-            )
-            if validated:
-                final_interaction = validated
-                formatted_message = f"*{final_interaction.action}*\n{final_interaction.dialogue}"
-                
-                # Extract and strip appearance subfields
-                if final_interaction.new_appearance:
-                    hair = final_interaction.new_appearance.hair.strip() if final_interaction.new_appearance.hair else ""
-                    clothing = final_interaction.new_appearance.clothing.strip() if final_interaction.new_appearance.clothing else ""
-                    accessories_and_held_items = final_interaction.new_appearance.accessories_and_held_items.strip() if final_interaction.new_appearance.accessories_and_held_items else ""
-                    posture_and_body_language = final_interaction.new_appearance.posture_and_body_language.strip() if final_interaction.new_appearance.posture_and_body_language else ""
-                    other_relevant_details = final_interaction.new_appearance.other_relevant_details.strip() if final_interaction.new_appearance.other_relevant_details else ""
-                else:
-                    hair = clothing = accessories_and_held_items = posture_and_body_language = other_relevant_details = None
-
-                msg_id = await chat_manager.add_message(
-                    character_name,
-                    formatted_message,
-                    visible=True,
-                    message_type="character",
-                    affect=final_interaction.affect,
-                    purpose=final_interaction.purpose,
-                    why_purpose=final_interaction.why_purpose,
-                    why_affect=final_interaction.why_affect,
-                    why_action=final_interaction.why_action,
-                    why_dialogue=final_interaction.why_dialogue,
-                    why_new_location=final_interaction.why_new_location,
-                    why_new_appearance=final_interaction.why_new_appearance,
-                    new_location=final_interaction.new_location.strip() if final_interaction.new_location.strip() else None,
-                    new_appearance=final_interaction.new_appearance  # Pass the object as is
-                )
-
-                # Handle appearance subfields separately
-                if final_interaction.new_location.strip():
-                    await chat_manager.handle_new_location_for_character(character_name, final_interaction.new_location, msg_id)
-                if final_interaction.new_appearance and any([
-                    hair, clothing, accessories_and_held_items, posture_and_body_language, other_relevant_details
-                ]):
-                    await chat_manager.handle_new_appearance_for_character(
-                        character_name,
-                        AppearanceSegments(
-                            hair=hair,
-                            clothing=clothing,
-                            accessories_and_held_items=accessories_and_held_items,
-                            posture_and_body_language=posture_and_body_language,
-                            other_relevant_details=other_relevant_details
-                        ),
-                        msg_id
-                    )
-                logger.debug(f"Valid message stored for {character_name}: {final_interaction.dialogue}")
-            else:
-                logger.warning(f"Interaction for {character_name} could not be validated or corrected. Not storing.")
-
-    except Exception as e:
-        logger.error(f"Error generating message for {character_name}: {e}")
-        await notification_queue.put((f"Error generating message for {character_name}: {e}", 'error'))
-    finally:
-        llm_busy = False
-        llm_status_label.text = ""
-        llm_status_label.visible = False
-        llm_status_label.update()
-
-    show_chat_display.refresh()
-    show_character_details.refresh()
+        # ADD this line so new messages appear:
+        show_chat_display.refresh()
 
 async def send_user_message():
     message = user_input.value.strip()

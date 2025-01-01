@@ -1,3 +1,4 @@
+# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/chats/chat_manager.py
 import os
 import logging
 from typing import List, Dict, Tuple, Optional
@@ -37,6 +38,7 @@ from typing import List
 class CharacterPlan(BaseModel):
     goal: str = ""
     steps: List[str] = []
+    why_new_plan_goal: str = ""  # <-- New field for storing reason(s) behind a changed plan/goal
 
 
 class ChatManager:
@@ -170,12 +172,16 @@ class ChatManager:
     def get_character_plan(self, char_name: str) -> CharacterPlan:
         plan_data = self.db.get_character_plan(self.session_id, char_name)
         if plan_data:
-            return CharacterPlan(goal=plan_data['goal'] or "", steps=plan_data['steps'] or [])
+            return CharacterPlan(
+                goal=plan_data['goal'] or "",
+                steps=plan_data['steps'] or [],
+                why_new_plan_goal=plan_data.get('why_new_plan_goal', "")
+            )
         else:
             return CharacterPlan()
 
     def save_character_plan(self, char_name: str, plan: CharacterPlan):
-        self.db.save_character_plan(self.session_id, char_name, plan.goal, plan.steps)
+        self.db.save_character_plan(self.session_id, char_name, plan.goal, plan.steps, plan.why_new_plan_goal)
 
     def next_speaker(self) -> Optional[str]:
         chars = self.get_character_names()
@@ -377,6 +383,9 @@ class ChatManager:
         )
         for pc in plan_changes:
             note = f"Plan changed (message {pc['triggered_by_message_id']}): {pc['change_summary']}"
+            # If the DB includes the new reason field, include it:
+            if 'why_new_plan_goal' in pc and pc['why_new_plan_goal']:
+                note += f" Reason: {pc['why_new_plan_goal']}"
             plan_changes_notes.append(note)
 
         plan_changes_text = ""
@@ -789,8 +798,7 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
         initial_interaction: Interaction
     ) -> Optional[Interaction]:
         if self.validation_loop_setting == 0:
-            # If no validation pass is wanted, update plan first and return
-            await self.update_character_plan(character_name)
+            # If no validation pass is wanted, simply return the initial interaction as-is
             return initial_interaction
 
         validation_client = OllamaClient(
@@ -876,8 +884,6 @@ Only produce valid JSON with these two top-level keys: "is_valid" and "corrected
 
             if validation_output.is_valid.lower() == "yes":
                 logger.debug(f"Interaction is valid on iteration {iteration}.")
-                # After validation, plan might also change:
-                await self.update_character_plan(character_name, triggered_message_id=None)
                 return current_interaction
 
             corrected = validation_output.corrected_interaction
@@ -909,15 +915,18 @@ Only produce valid JSON with these two top-level keys: "is_valid" and "corrected
         existing_plan = self.get_character_plan(character_name)
         old_goal = existing_plan.goal
         old_steps = existing_plan.steps
+        old_why = existing_plan.why_new_plan_goal
 
         current_appearance = self.db.get_character_appearance(self.session_id, character_name)
         character_description = self.characters[character_name].character_description
 
+        # Prompt to request "why_new_plan_goal" field as well
         system_prompt = """
 You are an expert assistant in crafting and refining long-term plans for narrative characters. Your primary responsibility is to ensure that each character's plan is practical, achievable within hours or days, and tailored to their current context, including their location and appearance. Each plan consists of:
 
 - A clear goal: The ultimate objective the character seeks to achieve.
-- Actionable steps: Specific, concrete, and sequential tasks that systematically progress the character toward their goal.
+- Actionable steps: Specific, concrete, and sequential tasks (not numbered but ordered from first to last) that systematically progress the character toward their goal.
+- If the plan or goal has changed, a short explanation of why should be stored in the field: "why_new_plan_goal".
 
 Your focus is to create plans that are logical, detailed, and aligned with the character’s circumstances.
         """
@@ -947,14 +956,17 @@ Your focus is to create plans that are logical, detailed, and aligned with the c
 - If revisions are necessary:
     - The "goal" might change or remain the same.
     - Modify the "steps" as needed by adding, removing, or updating them.
-- Output the updated plan strictly in JSON format following this structure:
+- Also provide a short explanation for any plan/goal changes in "why_new_plan_goal".
+
+Output the updated plan strictly in JSON format following this structure:
 
 {{
 "goal": "<string>",
-"steps": [ "step1", "step2", ... ]
+"steps": [ "step1", "step2", ... ],
+"why_new_plan_goal": "<short explanation here>"
 }}
 
-If no changes are needed, repeat the existing plan in the specified JSON format.
+If no changes are needed, simply repeat the existing plan in the same JSON format (including "why_new_plan_goal" if relevant).
 """
 
         plan_result = await asyncio.to_thread(
@@ -976,20 +988,28 @@ If no changes are needed, repeat the existing plan in the specified JSON format.
 
             new_goal = new_plan.goal
             new_steps = new_plan.steps
+            new_why = new_plan.why_new_plan_goal.strip()
 
-            if (new_goal != old_goal) or (new_steps != old_steps):
+            # If the LLM didn't provide a reason but changed the plan, fill something minimal:
+            if not new_why and ((new_goal != old_goal) or (new_steps != old_steps)):
+                new_why = "No specific reason was provided, but the plan was updated."
+
+            if (new_goal != old_goal) or (new_steps != old_steps) or (new_why != old_why):
                 change_explanation = self.build_plan_change_summary(old_goal, old_steps, new_goal, new_steps)
+                if new_why:
+                    change_explanation += f" Additional reason: {new_why}"
                 self.db.save_character_plan_with_history(
                     self.session_id,
                     character_name,
                     new_goal,
                     new_steps,
+                    new_why,
                     triggered_message_id,
                     change_explanation
                 )
                 logger.info(
                     f"Plan updated for '{character_name}'. "
-                    f"New goal: {new_goal}, steps: {new_steps}. Reason: {change_explanation}"
+                    f"New goal: {new_goal}, steps: {new_steps}. Reason: {new_why}"
                 )
             else:
                 self.db.save_character_plan_with_history(
@@ -997,6 +1017,7 @@ If no changes are needed, repeat the existing plan in the specified JSON format.
                     character_name,
                     new_goal,
                     new_steps,
+                    new_why,
                     triggered_message_id,
                     "No change in plan"
                 )
@@ -1015,3 +1036,4 @@ If no changes are needed, repeat the existing plan in the specified JSON format.
         if old_steps != new_steps:
             changes.append(f"Steps changed from {old_steps} to {new_steps}.")
         return " ".join(changes)
+

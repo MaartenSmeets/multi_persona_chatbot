@@ -1,3 +1,4 @@
+# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/db/db_manager.py
 import sqlite3
 import logging
 from typing import List, Dict, Any, Optional
@@ -243,6 +244,19 @@ class DBManager:
                 FOREIGN KEY(triggered_by_message_id) REFERENCES messages(id)
             )
         ''')
+
+        # Add a new column 'why_new_plan_goal' if not present in character_plans and history
+        try:
+            c.execute("ALTER TABLE character_plans ADD COLUMN why_new_plan_goal TEXT")
+            logger.info("Added column 'why_new_plan_goal' to 'character_plans'.")
+        except sqlite3.OperationalError:
+            logger.debug("Column 'why_new_plan_goal' already exists in 'character_plans'. Skipping.")
+
+        try:
+            c.execute("ALTER TABLE character_plans_history ADD COLUMN why_new_plan_goal TEXT")
+            logger.info("Added column 'why_new_plan_goal' to 'character_plans_history'.")
+        except sqlite3.OperationalError:
+            logger.debug("Column 'why_new_plan_goal' already exists in 'character_plans_history'. Skipping.")
 
         conn.commit()
         conn.close()
@@ -900,13 +914,13 @@ class DBManager:
         logger.info(f"Stored character_system_prompt and dynamic_prompt_template for character '{character_name}' in session '{session_id}'.")
 
     #
-    # Character Plans (goal + steps as a list)
+    # Character Plans (goal + steps + reason)
     #
     def get_character_plan(self, session_id: str, character_name: str) -> Optional[Dict[str, Any]]:
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
-            SELECT goal, steps, updated_at
+            SELECT goal, steps, updated_at, why_new_plan_goal
             FROM character_plans
             WHERE session_id = ? AND character_name = ?
         ''', (session_id, character_name))
@@ -916,6 +930,7 @@ class DBManager:
             goal_str = row[0] or ""
             steps_str = row[1] or ""
             updated_at = row[2]
+            why_new_plan = row[3] or ""
             steps_list = []
             if steps_str:
                 try:
@@ -925,25 +940,27 @@ class DBManager:
             return {
                 'goal': goal_str,
                 'steps': steps_list,
-                'updated_at': updated_at
+                'updated_at': updated_at,
+                'why_new_plan_goal': why_new_plan
             }
         return None
 
-    def save_character_plan(self, session_id: str, character_name: str, goal: str, steps: List[str]):
+    def save_character_plan(self, session_id: str, character_name: str, goal: str, steps: List[str], why_new_plan_goal: str):
         steps_str = json.dumps(steps)
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
-            INSERT INTO character_plans (session_id, character_name, goal, steps)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO character_plans (session_id, character_name, goal, steps, why_new_plan_goal)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(session_id, character_name)
             DO UPDATE SET goal=excluded.goal,
                           steps=excluded.steps,
+                          why_new_plan_goal=excluded.why_new_plan_goal,
                           updated_at=CURRENT_TIMESTAMP
-        ''', (session_id, character_name, goal, steps_str))
+        ''', (session_id, character_name, goal, steps_str, why_new_plan_goal))
         conn.commit()
         conn.close()
-        logger.info(f"Saved character plan for '{character_name}' in session '{session_id}': goal={goal}, steps={steps}")
+        logger.info(f"Saved character plan for '{character_name}' in session '{session_id}': goal={goal}, steps={steps}, reason={why_new_plan_goal}")
 
     def save_character_plan_with_history(
         self,
@@ -951,6 +968,7 @@ class DBManager:
         character_name: str,
         goal: str,
         steps: List[str],
+        why_new_plan_goal: str,
         triggered_by_message_id: Optional[int],
         change_summary: str
     ):
@@ -959,38 +977,40 @@ class DBManager:
         c = conn.cursor()
 
         c.execute('''
-            INSERT INTO character_plans (session_id, character_name, goal, steps)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO character_plans (session_id, character_name, goal, steps, why_new_plan_goal)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(session_id, character_name)
             DO UPDATE SET goal=excluded.goal,
                           steps=excluded.steps,
+                          why_new_plan_goal=excluded.why_new_plan_goal,
                           updated_at=CURRENT_TIMESTAMP
-        ''', (session_id, character_name, goal, steps_str))
+        ''', (session_id, character_name, goal, steps_str, why_new_plan_goal))
 
         c.execute('''
-            INSERT INTO character_plans_history (session_id, character_name, goal, steps, triggered_by_message_id, change_summary)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO character_plans_history (session_id, character_name, goal, steps, triggered_by_message_id, change_summary, why_new_plan_goal)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         ''', (
             session_id,
             character_name,
             goal,
             steps_str,
             triggered_by_message_id if triggered_by_message_id else None,
-            change_summary
+            change_summary,
+            why_new_plan_goal
         ))
 
         conn.commit()
         conn.close()
         logger.info(
             f"Saved character plan (with history) for '{character_name}' in session '{session_id}': "
-            f"goal={goal}, steps={steps}, triggered_by={triggered_by_message_id}, summary='{change_summary}'"
+            f"goal={goal}, steps={steps}, reason={why_new_plan_goal}, triggered_by={triggered_by_message_id}, summary='{change_summary}'"
         )
 
     def get_plan_changes_for_range(self, session_id: str, character_name: str, after_message_id: int, up_to_message_id: int) -> List[Dict[str, Any]]:
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
-            SELECT triggered_by_message_id, change_summary
+            SELECT triggered_by_message_id, change_summary, why_new_plan_goal
             FROM character_plans_history
             WHERE session_id = ?
               AND character_name = ?
@@ -1006,6 +1026,8 @@ class DBManager:
         for row in rows:
             results.append({
                 "triggered_by_message_id": row[0],
-                "change_summary": row[1]
+                "change_summary": row[1],
+                "why_new_plan_goal": row[2] or ""
             })
         return results
+
