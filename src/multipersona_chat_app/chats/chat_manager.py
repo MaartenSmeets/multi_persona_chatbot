@@ -437,18 +437,8 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
             f"up to message ID {covered_up_to_message_id}."
         )
 
-    #
-    # Prompt-building
-    #
-    def build_prompt_for_character(self, character_name: str) -> Tuple[str, str]:
-        existing_prompts = self.db.get_character_prompts(self.session_id, character_name)
-        if not existing_prompts:
-            raise ValueError(f"Existing prompts not found in the session for '{character_name}'.")
-
-        system_prompt = existing_prompts['character_system_prompt']
-        dynamic_prompt_template = existing_prompts['dynamic_prompt_template']
-
-        # Use the *per-character visible messages*
+    def get_latest_dialogue(self, character_name: str) -> str:
+                # Use the *per-character visible messages*
         visible_history = self.get_visible_history_for_character(character_name)
         recent_msgs = visible_history[-self.recent_dialogue_lines:]
 
@@ -466,6 +456,19 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
             formatted_dialogue_lines[-1] = f"### Latest Dialogue Line:\n{formatted_dialogue_lines[-1]}"
 
         latest_dialogue = "\n".join(formatted_dialogue_lines)
+        return latest_dialogue
+    #
+    # Prompt-building
+    #
+    def build_prompt_for_character(self, character_name: str) -> Tuple[str, str]:
+        existing_prompts = self.db.get_character_prompts(self.session_id, character_name)
+        if not existing_prompts:
+            raise ValueError(f"Existing prompts not found in the session for '{character_name}'.")
+
+        system_prompt = existing_prompts['character_system_prompt']
+        dynamic_prompt_template = existing_prompts['dynamic_prompt_template']
+
+        latest_dialogue = self.get_latest_dialogue(character_name)
 
         # Retrieve character-specific summaries and join them
         all_summaries = self.db.get_all_summaries(self.session_id, character_name)
@@ -921,14 +924,14 @@ Only produce valid JSON with these two top-level keys: "is_valid" and "corrected
         character_description = self.characters[character_name].character_description
 
         # Prompt to request "why_new_plan_goal" field as well
-        system_prompt = """
-You are an expert assistant in crafting and refining long-term plans for narrative characters. Your primary responsibility is to ensure that each character's plan is practical, achievable within hours or days, and tailored to their current context, including their location and appearance. Each plan consists of:
+        system_prompt = f"""
+You are an expert assistant in crafting and refining long-term plans for narrative characters. Your primary responsibility is to ensure that {character_name}'s plan is practical, achievable within hours or days, and tailored to their current context, including their location and appearance and recent events. Each plan consists of:
 
-- A clear goal: The ultimate objective the character seeks to achieve.
-- Actionable steps: Specific, concrete, and sequential tasks (not numbered but ordered from first to last) that systematically progress the character toward their goal.
+- A clear goal: The ultimate objective {character_name} seeks to achieve.
+- Actionable steps: Specific, concrete, and sequential tasks (not numbered but ordered from first to last) that systematically progress {character_name} toward their goal.
 - If the plan or goal has changed, a short explanation of why should be stored in the field: "why_new_plan_goal".
 
-Your focus is to create plans that are logical, detailed, and aligned with the character’s circumstances.
+Your focus is to create plans that are logical, detailed, and aligned with the {character_name}’s circumstances.
         """
 
         user_prompt = f"""
@@ -946,17 +949,17 @@ Your focus is to create plans that are logical, detailed, and aligned with the c
 - **Current Appearance:** {current_appearance}
 
 **Latest Dialogue:**
-{''.join(f'- {m["message"]}\n' for m in self.db.get_messages(self.session_id) if isinstance(m, dict))}
+{self.get_latest_dialogue(character_name)}
 
 **Instructions:**
-- Review the existing plan and the current context for {character_name}.
-- Determine if the plan needs to be revised based on any changes.
-- Ensure that the steps are actionable, concrete, sequential, and start from the current location and appearance.
+- Review {character_name}'s existing plan and the current context for {character_name}.
+- Determine if {character_name}'s plan needs to be revised based on any changes.
+- Ensure that the steps are actionable, concrete, sequential, and start from the current location, appearance and ### Latest Dialogue Line.
 - By the final step, the goal should be achieved.
 - If revisions are necessary:
     - The "goal" might change or remain the same.
     - Modify the "steps" as needed by adding, removing, or updating them.
-- Also provide a short explanation for any plan/goal changes in "why_new_plan_goal".
+- Also provide a short explanation why {character_name} changes his steps/plan/goal in "why_new_plan_goal".
 
 Output the updated plan strictly in JSON format following this structure:
 
