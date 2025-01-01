@@ -15,7 +15,7 @@ from models.interaction import Interaction, AppearanceSegments
 from pydantic import BaseModel, Field
 import json
 
-import asyncio  # <-- added for async background calls
+import asyncio  # <-- used for async background calls
 
 logger = logging.getLogger(__name__)
 
@@ -193,13 +193,13 @@ class ChatManager:
         if last_speaker == self.you_name:
             return chars[0]
 
-        # If the last speaker was a character, pick the *next* character in the list
+        # If the last speaker was a character, pick the next character in the list
         if last_speaker in chars:
             idx = chars.index(last_speaker)
             next_idx = (idx + 1) % len(chars)
             return chars[next_idx]
 
-        # If the last speaker is something else (like system), just return the first character
+        # Otherwise, default to the first character
         return chars[0]
 
     def advance_turn(self):
@@ -208,7 +208,16 @@ class ChatManager:
         pass
 
     #
-    # CHANGE: 'add_message' is now async to avoid blocking when we do summarization.
+    # NEW: get per-character visible history
+    #
+    def get_visible_history_for_character(self, character_name: str) -> List[Dict]:
+        """
+        Return only the messages visible to that character (based on the new per-character visibility).
+        """
+        return self.db.get_visible_messages_for_character(self.session_id, character_name)
+
+    #
+    # MAKE 'add_message' ASYNC to allow background summarization
     #
     async def add_message(self,
                           sender: str,
@@ -227,7 +236,9 @@ class ChatManager:
                           new_appearance: Optional[AppearanceSegments] = None
                          ) -> Optional[int]:
         """
-        new_appearance is now an AppearanceSegments object. We'll pass subfields to DB if present.
+        When adding a message:
+         - We'll store it in the messages table (legacy visible=1).
+         - Then we also mark it as visible for each character in the session (via message_visibility).
         """
         if message_type == "system" or message.strip() == "...":
             return None
@@ -243,7 +254,7 @@ class ChatManager:
             self.session_id,
             sender,
             message,
-            visible,
+            True,  # keep old 'visible' field = 1 (for legacy)
             message_type,
             affect,
             purpose,
@@ -254,8 +265,6 @@ class ChatManager:
             why_new_location,
             why_new_appearance,
             new_location,
-            # For backward compatibility, we won't fill a single "new_appearance" column.
-            # Instead, we pass the 5 new subfields:
             hair_val,
             cloth_val,
             acc_val,
@@ -263,19 +272,165 @@ class ChatManager:
             other_val
         )
 
+        # Now mark it as visible for each character in the session
+        self.db.add_message_visibility_for_session_characters(self.session_id, message_id)
+
         # Kick off summarization in the background
         await self.check_summarization()
 
         return message_id
 
-    def get_visible_history(self) -> List[Dict]:
-        """
-        Return only the visible messages as a list of dictionaries.
-        (Removed summary strings to avoid mixing dicts and strings.)
-        """
+    #
+    # Summarization
+    #
+    async def check_summarization(self):
         all_msgs = self.db.get_messages(self.session_id)
-        return [m for m in all_msgs if m["visible"]]
+        # If total messages so far is below threshold, do nothing
+        if len(all_msgs) < self.summarization_threshold:
+            return
 
+        # Summarize for all characters who have participated
+        participants = set(m["sender"] for m in all_msgs if m["message_type"] in ["user", "character"])
+        for char_name in participants:
+            # Only summarize for characters we actively manage, ignoring "You" or others
+            if char_name in self.characters:
+                await self.summarize_history_for_character(char_name)
+
+    async def summarize_history_for_character(self, character_name: str):
+        # Get the last covered message ID for this character
+        last_covered_id = self.db.get_latest_covered_message_id(self.session_id, character_name)
+
+        # Retrieve only visible messages for this character
+        msgs = self.db.get_visible_messages_for_character(self.session_id, character_name)
+        relevant_msgs = [
+            (
+                m["id"],
+                m["sender"],
+                m["message"],
+                m["affect"],
+                m.get("purpose", None),
+                m.get("why_purpose", None),
+                m.get("why_affect", None),
+                m.get("why_action", None),
+                m.get("why_dialogue", None),
+                m.get("why_new_location", None),
+                m.get("why_new_appearance", None),
+            )
+            for m in msgs
+            if m["id"] > last_covered_id and m["message_type"] != "system"
+        ]
+
+        if not relevant_msgs:
+            logger.debug(f"No new relevant messages to summarize for '{character_name}'.")
+            return
+
+        # Summarize only up to self.to_summarize_count
+        to_summarize = relevant_msgs[:self.to_summarize_count]
+        covered_up_to_message_id = to_summarize[-1][0] if to_summarize else last_covered_id
+
+        logger.debug(
+            f"Summarizing history for '{character_name}'. "
+            f"Messages to summarize: {len(to_summarize)}. "
+            f"Covering up to message ID: {covered_up_to_message_id}."
+        )
+
+        history_lines = []
+        max_message_id_in_chunk = 0
+        for (
+            mid, sender, message, affect, purpose,
+            why_purpose, why_affect, why_action,
+            why_dialogue, why_new_location, why_new_appearance
+        ) in to_summarize:
+
+            if mid > max_message_id_in_chunk:
+                max_message_id_in_chunk = mid
+
+            if sender == character_name:
+                line_parts = [f"{sender}:"]
+                line_parts.append(f"(Affect={affect}, Purpose={purpose})")
+                if why_purpose: 
+                    line_parts.append(f"why_purpose={why_purpose}")
+                if why_affect:
+                    line_parts.append(f"why_affect={why_affect}")
+                if why_action:
+                    line_parts.append(f"why_action={why_action}")
+                if why_dialogue:
+                    line_parts.append(f"why_dialogue={why_dialogue}")
+                if why_new_location:
+                    line_parts.append(f"why_new_location={why_new_location}")
+                if why_new_appearance:
+                    line_parts.append(f"why_new_appearance={why_new_appearance}")
+
+                line_parts.append(f"Message={message}")
+                line = " | ".join(line_parts)
+            else:
+                line = f"{sender}: {message}"
+
+            history_lines.append(line)
+
+        plan_changes_notes = []
+        plan_changes = self.db.get_plan_changes_for_range(
+            self.session_id,
+            character_name,
+            last_covered_id,
+            max_message_id_in_chunk
+        )
+        for pc in plan_changes:
+            note = f"Plan changed (message {pc['triggered_by_message_id']}): {pc['change_summary']}"
+            plan_changes_notes.append(note)
+
+        plan_changes_text = ""
+        if plan_changes_notes:
+            plan_changes_text = (
+                "\n\nAdditionally, the following plan changes occurred:\n"
+                + "\n".join(plan_changes_notes)
+            )
+
+        history_text = "\n".join(history_lines) + plan_changes_text
+
+        prompt = f"""You are summarizing the conversation **from {character_name}'s perspective**.
+Focus on newly revealed or changed details (feelings, location, appearance, important topic shifts, interpersonal dynamics).
+Incorporate any 'why_*' information to clarify motivations or changes in mind/goals.
+Also note any plan changes or newly revealed steps in the plan. 
+Avoid restating old environment details unless crucial.
+
+Recent events to summarize:
+{history_text}
+
+Now produce a short summary from {character_name}'s viewpoint, emphasizing why changes happened when relevant.
+"""
+
+        logger.debug(f"Summarization prompt for '{character_name}':\n{prompt}")
+
+        summarize_llm = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml')
+        new_summary = await asyncio.to_thread(summarize_llm.generate, prompt=prompt)
+
+        logger.debug(f"Summarization response for '{character_name}': {new_summary}")
+
+        if not new_summary:
+            new_summary = "No significant new events."
+
+        self.db.save_new_summary(self.session_id, character_name, new_summary, covered_up_to_message_id)
+
+        # Hide old messages for this character, except the last self.recent_dialogue_lines
+        to_hide_ids = [m[0] for m in to_summarize]
+        if len(to_hide_ids) > self.recent_dialogue_lines:
+            ids_to_hide = to_hide_ids[:-self.recent_dialogue_lines]
+        else:
+            ids_to_hide = []
+
+        if ids_to_hide:
+            self.db.hide_messages_for_character(self.session_id, character_name, ids_to_hide)
+            logger.debug(f"Hid message IDs for '{character_name}': {ids_to_hide}")
+
+        logger.info(
+            f"Summarized and concealed old messages for '{character_name}', "
+            f"up to message ID {covered_up_to_message_id}."
+        )
+
+    #
+    # Prompt-building
+    #
     def build_prompt_for_character(self, character_name: str) -> Tuple[str, str]:
         existing_prompts = self.db.get_character_prompts(self.session_id, character_name)
         if not existing_prompts:
@@ -284,7 +439,8 @@ class ChatManager:
         system_prompt = existing_prompts['character_system_prompt']
         dynamic_prompt_template = existing_prompts['dynamic_prompt_template']
 
-        visible_history = self.get_visible_history()
+        # Use the *per-character visible messages*
+        visible_history = self.get_visible_history_for_character(character_name)
         recent_msgs = visible_history[-self.recent_dialogue_lines:]
 
         formatted_dialogue_lines = []
@@ -342,7 +498,8 @@ class ChatManager:
             appearance=char.appearance,
         )
 
-        visible_history = self.get_visible_history()
+        # Use per-character visible messages
+        visible_history = self.get_visible_history_for_character(character_name)
         latest_dialogue = visible_history[-1]['message'] if visible_history else ""
         
         if latest_dialogue:
@@ -423,156 +580,158 @@ class ChatManager:
         self.automatic_running = False
 
 
-    async def check_summarization(self):
+    #
+    # BUG 2 FIX: Update/evaluate plan BEFORE generating the next interaction
+    #
+    async def generate_character_message(self, character_name: str):
+        logger.info(f"Generating message for character: {character_name}")
+
+        # First, update/evaluate the plan in case a recent message changed it
         all_msgs = self.db.get_messages(self.session_id)
-        # If total visible messages so far is below threshold, do nothing
-        if len(all_msgs) < self.summarization_threshold:
-            return
+        triggered_message_id = all_msgs[-1]['id'] if all_msgs else None
+        await self.update_character_plan(character_name, triggered_message_id)
 
-        # Summarize for all characters who have participated
-        participants = set(m["sender"] for m in all_msgs if m["message_type"] in ["user", "character"])
-        for char_name in participants:
-            # Only summarize for characters we actively manage
-            if char_name in self.characters:
-                await self.summarize_history_for_character(char_name)
-
-
-    async def summarize_history_for_character(self, character_name: str):
-        msgs = self.db.get_messages(self.session_id)
-        last_covered_id = self.db.get_latest_covered_message_id(self.session_id, character_name)
-        # We'll include the 'why' fields in the summarization lines
-        relevant_msgs = [
-            (
-                m["id"],
-                m["sender"],
-                m["message"],
-                m["affect"],
-                m.get("purpose", None),
-                m.get("why_purpose", None),
-                m.get("why_affect", None),
-                m.get("why_action", None),
-                m.get("why_dialogue", None),
-                m.get("why_new_location", None),
-                m.get("why_new_appearance", None),
-            )
-            for m in msgs
-            if m["visible"] and m["message_type"] != "system" and m["id"] > last_covered_id
-        ]
-
-        if not relevant_msgs:
-            logger.debug(f"No new relevant messages to summarize for '{character_name}'.")
-            return
-
-        to_summarize = relevant_msgs[:self.to_summarize_count]
-        covered_up_to_message_id = to_summarize[-1][0] if to_summarize else last_covered_id
-
-        logger.debug(
-            f"Summarizing history for '{character_name}'. "
-            f"Messages to summarize: {len(to_summarize)}. "
-            f"Covering up to message ID: {covered_up_to_message_id}."
+        # If character hasn't introduced themselves yet, do that first
+        char_spoken_before = any(
+            m for m in all_msgs
+            if m["sender"] == character_name and m["message_type"] == "character"
         )
+        if not char_spoken_before:
+            await self.generate_character_introduction_message(character_name)
+            return
 
-        history_lines = []
-        max_message_id_in_chunk = 0
-        for (
-            mid, sender, message, affect, purpose,
-            why_purpose, why_affect, why_action,
-            why_dialogue, why_new_location, why_new_appearance
-        ) in to_summarize:
+        try:
+            system_prompt, formatted_prompt = self.build_prompt_for_character(character_name)
 
-            if mid > max_message_id_in_chunk:
-                max_message_id_in_chunk = mid
+            # Call the LLM for an Interaction result (async background)
+            llm_client = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml', output_model=Interaction)
+            interaction = await asyncio.to_thread(
+                llm_client.generate,
+                prompt=formatted_prompt,
+                system=system_prompt,
+                use_cache=False
+            )
 
-            if sender == character_name:
-                line_parts = [f"{sender}:"]
-                line_parts.append(f"(Affect={affect}, Purpose={purpose})")
-                if why_purpose: 
-                    line_parts.append(f"why_purpose={why_purpose}")
-                if why_affect:
-                    line_parts.append(f"why_affect={why_affect}")
-                if why_action:
-                    line_parts.append(f"why_action={why_action}")
-                if why_dialogue:
-                    line_parts.append(f"why_dialogue={why_dialogue}")
-                if why_new_location:
-                    line_parts.append(f"why_new_location={why_new_location}")
-                if why_new_appearance:
-                    line_parts.append(f"why_new_appearance={why_new_appearance}")
+            logger.debug(f"Raw interaction type: {type(interaction)}, value: {interaction}")
 
-                line_parts.append(f"Message={message}")
-                line = " | ".join(line_parts)
+            if not interaction:
+                logger.warning(f"No response for {character_name}. Not storing.")
+                return
+
+            if not isinstance(interaction, Interaction):
+                logger.error(
+                    f"Received invalid interaction type from LLM. "
+                    f"Expected an Interaction object but got {type(interaction)}. Value: {interaction}"
+                )
+                return
+
+            # Validate & possibly correct the interaction
+            validated = await self.validate_and_possibly_correct_interaction(
+                character_name, system_prompt, formatted_prompt, interaction
+            )
+            if validated:
+                final_interaction = validated
+                formatted_message = f"*{final_interaction.action}*\n{final_interaction.dialogue}"
+
+                msg_id = await self.add_message(
+                    character_name,
+                    formatted_message,
+                    visible=True,
+                    message_type="character",
+                    affect=final_interaction.affect,
+                    purpose=final_interaction.purpose,
+                    why_purpose=final_interaction.why_purpose,
+                    why_affect=final_interaction.why_affect,
+                    why_action=final_interaction.why_action,
+                    why_dialogue=final_interaction.why_dialogue,
+                    why_new_location=final_interaction.why_new_location,
+                    why_new_appearance=final_interaction.why_new_appearance,
+                    new_location=final_interaction.new_location.strip() if final_interaction.new_location.strip() else None,
+                    new_appearance=final_interaction.new_appearance  # Pass the object as is
+                )
+
+                # Handle appearance subfields separately
+                if final_interaction.new_location.strip():
+                    await self.handle_new_location_for_character(character_name, final_interaction.new_location, msg_id)
+                if final_interaction.new_appearance and any([
+                    final_interaction.new_appearance.hair.strip(),
+                    final_interaction.new_appearance.clothing.strip(),
+                    final_interaction.new_appearance.accessories_and_held_items.strip(),
+                    final_interaction.new_appearance.posture_and_body_language.strip(),
+                    final_interaction.new_appearance.other_relevant_details.strip()
+                ]):
+                    await self.handle_new_appearance_for_character(
+                        character_name,
+                        AppearanceSegments(
+                            hair=final_interaction.new_appearance.hair,
+                            clothing=final_interaction.new_appearance.clothing,
+                            accessories_and_held_items=final_interaction.new_appearance.accessories_and_held_items,
+                            posture_and_body_language=final_interaction.new_appearance.posture_and_body_language,
+                            other_relevant_details=final_interaction.new_appearance.other_relevant_details
+                        ),
+                        msg_id
+                    )
+                logger.debug(f"Valid message stored for {character_name}: {final_interaction.dialogue}")
             else:
-                line = f"{sender}: {message}"
+                logger.warning(f"Interaction for {character_name} could not be validated or corrected. Not storing.")
 
-            history_lines.append(line)
+        except Exception as e:
+            logger.error(f"Error generating message for {character_name}: {e}", exc_info=True)
 
-        plan_changes_notes = []
-        plan_changes = self.db.get_plan_changes_for_range(
-            self.session_id,
-            character_name,
-            last_covered_id,
-            max_message_id_in_chunk
+    async def generate_character_introduction_message(self, character_name: str):
+        logger.info(f"Building introduction prompts for character: {character_name}")
+        system_prompt, introduction_prompt = self.build_introduction_prompts_for_character(character_name)
+        introduction_llm_client = OllamaClient(
+            'src/multipersona_chat_app/config/llm_config.yaml',
+            output_model=CharacterIntroductionOutput
         )
-        for pc in plan_changes:
-            note = f"Plan changed (message {pc['triggered_by_message_id']}): {pc['change_summary']}"
-            plan_changes_notes.append(note)
 
-        plan_changes_text = ""
-        if plan_changes_notes:
-            plan_changes_text = (
-                "\n\nAdditionally, the following plan changes occurred:\n"
-                + "\n".join(plan_changes_notes)
+        try:
+            introduction_response = await asyncio.to_thread(
+                introduction_llm_client.generate,
+                prompt=introduction_prompt,
+                system=system_prompt
             )
 
-        history_text = "\n".join(history_lines) + plan_changes_text
+            if isinstance(introduction_response, CharacterIntroductionOutput):
+                intro_text = introduction_response.introduction_text.strip()
+                # We'll store the five subfields
+                app_seg = introduction_response.current_appearance
+                loc = introduction_response.current_location.strip()
 
-        prompt = f"""You are summarizing the conversation **from {character_name}'s perspective**.
-Focus on newly revealed or changed details (feelings, location, appearance, important topic shifts, interpersonal dynamics).
-Incorporate any 'why_*' information to clarify motivations or changes in mind/goals.
-Also note any plan changes or newly revealed steps in the plan. 
-Avoid restating old environment details unless crucial.
+                logger.info(f"Introduction generated for {character_name}. Text: {intro_text}")
 
-Recent events to summarize:
-{history_text}
+                msg_id = await self.add_message(
+                    character_name,
+                    intro_text,
+                    visible=True,
+                    message_type="character"
+                )
 
-Now produce a short summary from {character_name}'s viewpoint, emphasizing why changes happened (based on 'why_*' fields) when relevant.
-"""
+                # If there is a location, handle it
+                if loc:
+                    await self.handle_new_location_for_character(character_name, loc, msg_id)
 
-        logger.debug(f"Summarization prompt for '{character_name}':\n{prompt}")
+                # Convert to AppearanceSegments for DB
+                new_app_segments = AppearanceSegments(
+                    hair=app_seg.hair,
+                    clothing=app_seg.clothing,
+                    accessories_and_held_items=app_seg.accessories_and_held_items,
+                    posture_and_body_language=app_seg.posture_and_body_language,
+                    other_relevant_details=app_seg.other_relevant_details
+                )
+                await self.handle_new_appearance_for_character(character_name, new_app_segments, msg_id)
 
-        summarize_llm = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml')
-        new_summary = await asyncio.to_thread(summarize_llm.generate, prompt=prompt)
+                logger.info(f"Saved introduction message for {character_name}")
+            else:
+                logger.warning(f"Invalid response received for introduction of {character_name}. Response: {introduction_response}")
 
-        logger.debug(f"Summarization response for '{character_name}': {new_summary}")
+        except Exception as e:
+            logger.error(f"Error generating introduction for {character_name}: {e}", exc_info=True)
+            return
 
-        if not new_summary:
-            new_summary = "No significant new events."
-
-        self.db.save_new_summary(self.session_id, character_name, new_summary, covered_up_to_message_id)
-
-        to_hide_ids = [m[0] for m in to_summarize]
-        if len(to_hide_ids) > self.recent_dialogue_lines:
-            ids_to_hide = to_hide_ids[:-self.recent_dialogue_lines]
-        else:
-            ids_to_hide = to_hide_ids[:]
-
-        if ids_to_hide:
-            conn = self.db._ensure_connection()
-            c = conn.cursor()
-            placeholders = ",".join("?" * len(ids_to_hide))
-            try:
-                c.execute(f"UPDATE messages SET visible=0 WHERE id IN ({placeholders})", ids_to_hide)
-                conn.commit()
-                logger.debug(f"Hid message IDs for '{character_name}': {ids_to_hide}")
-            except Exception as e:
-                logger.error(f"Error hiding messages for '{character_name}': {e}")
-            finally:
-                conn.close()
-
-        logger.info(
-            f"Summarized and concealed old messages for '{character_name}', "
-            f"up to message ID {covered_up_to_message_id}."
-        )
+        # Now generate the initial plan for this character
+        await self.update_character_plan(character_name, triggered_message_id=None)
 
     def get_session_name(self) -> str:
         sessions = self.db.get_all_sessions()
@@ -584,6 +743,9 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
     def get_introduction_template(self) -> str:
         return INTRODUCTION_TEMPLATE
 
+    #
+    # Apply changes for new location/appearance
+    #
     async def handle_new_location_for_character(self, character_name: str, new_location: str, triggered_message_id: int):
         updated = self.db.update_character_location(
             self.session_id,
@@ -594,23 +756,31 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
         if updated:
             logger.info(f"Character '{character_name}' moved/updated location to '{new_location}'.")
 
-    async def handle_new_appearance_for_character(self, character_name: str, new_appearance: AppearanceSegments, triggered_message_id: int):
+    async def handle_new_appearance_for_character(self, character_name: str, new_appearance: AppearanceSegments, triggered_message_id: int) -> bool:
         """
-        Update each subfield in DB if it's non-empty, merging with old data if needed.
+        Handle updating a character's appearance based on new_appearance data.
         """
         updated = self.db.update_character_appearance(
             self.session_id,
             character_name,
             new_appearance,
-            triggered_by_message_id=triggered_message_id
+            triggered_by_message_id=triggered_message_id  # Corrected variable name
         )
         if updated:
             logger.info(f"Character '{character_name}' updated appearance subfields: {new_appearance.dict()}")
+        return updated
 
     def get_all_visible_messages(self) -> List[Dict]:
+        """
+        This method is kept for UI calls that simply want all messages from the 'messages' table.
+        It does NOT reflect per-character visibility. We keep it only for backward compatibility.
+        """
         visible_msgs = self.db.get_messages(self.session_id)
-        return [m for m in visible_msgs if m["visible"]]
-    
+        return [m for m in visible_msgs if m["message_type"] in ("user","character","assistant","system")]
+
+    #
+    # Validation / Correction
+    #
     async def validate_and_possibly_correct_interaction(
         self,
         character_name: str,
@@ -619,6 +789,7 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
         initial_interaction: Interaction
     ) -> Optional[Interaction]:
         if self.validation_loop_setting == 0:
+            # If no validation pass is wanted, update plan first and return
             await self.update_character_plan(character_name)
             return initial_interaction
 
@@ -634,7 +805,7 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
             iteration += 1
             logger.debug(f"Validation iteration {iteration} for character '{character_name}'")
 
-            validation_prompt = f"""You are checking if the following JSON interaction is valid according to the character's system prompt and dynamic prompt.
+            validation_prompt = f"""You are checking if the following JSON interaction is valid according to the character's system prompt and dynamic prompt template.
 
 System Prompt (character rules, guidelines):
 {system_prompt}
@@ -705,6 +876,7 @@ Only produce valid JSON with these two top-level keys: "is_valid" and "corrected
 
             if validation_output.is_valid.lower() == "yes":
                 logger.debug(f"Interaction is valid on iteration {iteration}.")
+                # After validation, plan might also change:
                 await self.update_character_plan(character_name, triggered_message_id=None)
                 return current_interaction
 
@@ -725,6 +897,9 @@ Only produce valid JSON with these two top-level keys: "is_valid" and "corrected
         
         return None
 
+    #
+    # Plan Updating
+    #
     async def update_character_plan(self, character_name: str, triggered_message_id: Optional[int] = None):
         plan_client = OllamaClient(
             config_path='src/multipersona_chat_app/config/llm_config.yaml',
@@ -762,12 +937,12 @@ Your focus is to create plans that are logical, detailed, and aligned with the c
 - **Current Appearance:** {current_appearance}
 
 **Latest Dialogue:**
-{''.join(f'- {m["message"]}\n' for m in self.get_visible_history() if isinstance(m, dict))}
+{''.join(f'- {m["message"]}\n' for m in self.db.get_messages(self.session_id) if isinstance(m, dict))}
 
 **Instructions:**
 - Review the existing plan and the current context for {character_name}.
-- Determine if the plan needs to be revised based on any changes in {character_name}'s situation.
-- Ensure that the steps are actionable, concrete, sequential and start from the current location at setting and current appearance.
+- Determine if the plan needs to be revised based on any changes.
+- Ensure that the steps are actionable, concrete, sequential, and start from the current location and appearance.
 - By the final step, the goal should be achieved.
 - If revisions are necessary:
     - The "goal" might change or remain the same.
@@ -840,58 +1015,3 @@ If no changes are needed, repeat the existing plan in the specified JSON format.
         if old_steps != new_steps:
             changes.append(f"Steps changed from {old_steps} to {new_steps}.")
         return " ".join(changes)
-
-    async def generate_character_introduction_message(self, character_name: str):
-        logger.info(f"Building introduction prompts for character: {character_name}")
-        system_prompt, introduction_prompt = self.build_introduction_prompts_for_character(character_name)
-        introduction_llm_client = OllamaClient(
-            'src/multipersona_chat_app/config/llm_config.yaml',
-            output_model=CharacterIntroductionOutput
-        )
-
-        try:
-            introduction_response = await asyncio.to_thread(
-                introduction_llm_client.generate,
-                prompt=introduction_prompt,
-                system=system_prompt
-            )
-
-            if isinstance(introduction_response, CharacterIntroductionOutput):
-                intro_text = introduction_response.introduction_text.strip()
-                # We'll store the five subfields
-                app_seg = introduction_response.current_appearance
-                loc = introduction_response.current_location.strip()
-
-                logger.info(f"Introduction generated for {character_name}. Text: {intro_text}")
-
-                msg_id = await self.add_message(
-                    character_name,
-                    intro_text,
-                    visible=True,
-                    message_type="character"
-                )
-
-                # If there is a location, handle it
-                if loc:
-                    await self.handle_new_location_for_character(character_name, loc, msg_id)
-
-                # Convert to AppearanceSegments for DB
-                new_app_segments = AppearanceSegments(
-                    hair=app_seg.hair,
-                    clothing=app_seg.clothing,
-                    accessories_and_held_items=app_seg.accessories_and_held_items,
-                    posture_and_body_language=app_seg.posture_and_body_language,
-                    other_relevant_details=app_seg.other_relevant_details
-                )
-                await self.handle_new_appearance_for_character(character_name, new_app_segments, msg_id)
-
-                logger.info(f"Saved introduction message for {character_name}")
-            else:
-                logger.warning(f"Invalid response received for introduction of {character_name}. Response: {introduction_response}")
-
-        except Exception as e:
-            logger.error(f"Error generating introduction for {character_name}: {e}", exc_info=True)
-            return
-
-        # Now generate the initial plan
-        await self.update_character_plan(character_name, triggered_message_id=None)

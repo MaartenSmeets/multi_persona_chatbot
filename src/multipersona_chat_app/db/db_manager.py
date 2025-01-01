@@ -70,7 +70,7 @@ class DBManager:
 
                 new_location TEXT,
 
-                -- Each new_appearance subfield is stored in a separate column:
+                -- Each new_appearance subfield is stored in separate columns:
                 hair TEXT,
                 clothing TEXT,
                 accessories_and_held_items TEXT,
@@ -103,6 +103,19 @@ class DBManager:
             except sqlite3.OperationalError:
                 logger.debug(f"Column '{col}' already exists in 'messages' table. Skipping.")
 
+        # Create per-character message visibility table
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS message_visibility (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                character_name TEXT NOT NULL,
+                message_id INTEGER NOT NULL,
+                visible INTEGER DEFAULT 1,
+                FOREIGN KEY(session_id) REFERENCES sessions(session_id),
+                FOREIGN KEY(message_id) REFERENCES messages(id)
+            )
+        ''')
+
         # Create summaries table
         c.execute('''
             CREATE TABLE IF NOT EXISTS summaries (
@@ -134,12 +147,12 @@ class DBManager:
                 session_id TEXT NOT NULL,
                 character_name TEXT NOT NULL,
                 current_location TEXT,
-                current_appearance TEXT, -- We keep this for backward compatibility / single text
-                FOREIGN KEY(session_id) REFERENCES sessions(session_id),
-                PRIMARY KEY (session_id, character_name)
+                current_appearance TEXT,
+                PRIMARY KEY (session_id, character_name),
+                FOREIGN KEY(session_id) REFERENCES sessions(session_id)
             )
         ''')
-        # We need separate columns for each subfield of appearance
+        # Add new appearance subfields if not present
         subfields_to_add = [
             ("hair", "TEXT"),
             ("clothing", "TEXT"),
@@ -231,18 +244,6 @@ class DBManager:
             )
         ''')
 
-        # Add columns to character_plans_history if they do not exist
-        history_columns = [
-            ("triggered_by_message_id", "INTEGER"),
-            ("change_summary", "TEXT"),
-        ]
-        for col, ctype in history_columns:
-            try:
-                c.execute(f"ALTER TABLE character_plans_history ADD COLUMN {col} {ctype}")
-                logger.info(f"Added column '{col}' to 'character_plans_history' table.")
-            except sqlite3.OperationalError:
-                logger.debug(f"Column '{col}' already exists in 'character_plans_history' table. Skipping.")
-
         conn.commit()
         conn.close()
         logger.info("Database initialized with required tables (including new columns for segmented appearance).")
@@ -271,6 +272,7 @@ class DBManager:
         c.execute('DELETE FROM appearance_history WHERE session_id = ?', (session_id,))
         c.execute('DELETE FROM character_plans WHERE session_id = ?', (session_id,))
         c.execute('DELETE FROM character_plans_history WHERE session_id = ?', (session_id,))
+        c.execute('DELETE FROM message_visibility WHERE session_id = ?', (session_id,))
         conn.commit()
         conn.close()
         logger.info(f"Session with ID '{session_id}' and all associated data deleted.")
@@ -418,7 +420,6 @@ class DBManager:
             acc = row[3] or ""
             posture = row[4] or ""
             other = row[5] or ""
-            # Combine for a quick textual summary:
             combined = []
             if hair.strip():
                 combined.append(f"Hair: {hair}")
@@ -670,7 +671,104 @@ class DBManager:
         logger.debug(f"Message saved with ID {message_id} for session '{session_id}'.")
         return message_id
 
+    #
+    # Per-character message visibility
+    #
+    def add_message_visibility_for_session_characters(self, session_id: str, message_id: int):
+        """
+        After saving a new message, mark it as visible for each character in session_characters.
+        """
+        chars = self.get_session_characters(session_id)
+        conn = self._ensure_connection()
+        c = conn.cursor()
+        for char in chars:
+            c.execute('''
+                INSERT INTO message_visibility (session_id, character_name, message_id, visible)
+                VALUES (?, ?, ?, ?)
+            ''', (session_id, char, message_id, 1))
+        conn.commit()
+        conn.close()
+        logger.debug(
+            f"Marked message ID {message_id} as visible for all characters in session '{session_id}': {chars}"
+        )
+
+    def get_visible_messages_for_character(self, session_id: str, character_name: str) -> List[Dict[str, Any]]:
+        """
+        Return only messages that are still marked visible for a given character.
+        """
+        conn = self._ensure_connection()
+        c = conn.cursor()
+        c.execute('''
+            SELECT m.id, m.sender, m.message, mv.visible, m.message_type,
+                   m.affect, m.purpose, m.created_at,
+                   m.why_purpose, m.why_affect, m.why_action, m.why_dialogue,
+                   m.why_new_location, m.why_new_appearance,
+                   m.new_location,
+                   m.hair, m.clothing, m.accessories_and_held_items, m.posture_and_body_language, m.other_relevant_details
+            FROM messages m
+            JOIN message_visibility mv ON m.id = mv.message_id
+            WHERE mv.session_id = ?
+              AND mv.character_name = ?
+              AND mv.visible = 1
+            ORDER BY m.id ASC
+        ''', (session_id, character_name))
+        rows = c.fetchall()
+        conn.close()
+        messages = []
+        for row in rows:
+            messages.append({
+                'id': row[0],
+                'sender': row[1],
+                'message': row[2],
+                'visible': bool(row[3]),
+                'message_type': row[4],
+                'affect': row[5],
+                'purpose': row[6],
+                'created_at': row[7],
+                'why_purpose': row[8],
+                'why_affect': row[9],
+                'why_action': row[10],
+                'why_dialogue': row[11],
+                'why_new_location': row[12],
+                'why_new_appearance': row[13],
+                'new_location': row[14],
+                'hair': row[15],
+                'clothing': row[16],
+                'accessories_and_held_items': row[17],
+                'posture_and_body_language': row[18],
+                'other_relevant_details': row[19],
+            })
+        return messages
+
+    def hide_messages_for_character(self, session_id: str, character_name: str, message_ids: List[int]):
+        """
+        Hide a list of messages for one character by setting visible=0 in message_visibility.
+        """
+        if not message_ids:
+            return
+        conn = self._ensure_connection()
+        c = conn.cursor()
+        placeholders = ",".join("?" * len(message_ids))
+        params = [session_id, character_name] + message_ids
+        c.execute(f'''
+            UPDATE message_visibility
+            SET visible = 0
+            WHERE session_id = ?
+              AND character_name = ?
+              AND message_id IN ({placeholders})
+        ''', params)
+        conn.commit()
+        conn.close()
+        logger.debug(
+            f"Hidden messages {message_ids} for character '{character_name}' in session '{session_id}'."
+        )
+
     def get_messages(self, session_id: str) -> List[Dict[str, Any]]:
+        """
+        This returns *all* messages in ascending order from the messages table.
+        This does NOT reflect the per-character visibility. It's mostly for overall
+        session logging or for the user to see everything.
+        """
         conn = self._ensure_connection()
         c = conn.cursor()
         c.execute('''
