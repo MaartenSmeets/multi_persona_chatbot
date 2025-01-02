@@ -291,16 +291,21 @@ class ChatManager:
     #
     async def check_summarization(self):
         all_msgs = self.db.get_messages(self.session_id)
-        # If total messages so far is below threshold, do nothing
-        if len(all_msgs) < self.summarization_threshold:
+        if not all_msgs:
             return
+
+        last_msg_id = all_msgs[-1]['id']
 
         # Summarize for all characters who have participated
         participants = set(m["sender"] for m in all_msgs if m["message_type"] in ["user", "character"])
         for char_name in participants:
             # Only summarize for characters we actively manage, ignoring "You" or others
             if char_name in self.characters:
-                await self.summarize_history_for_character(char_name)
+                last_covered_id = self.db.get_latest_covered_message_id(self.session_id, char_name)
+                # Only trigger summarization if we have at least 'summarization_threshold' new messages
+                # since the last covered message ID.
+                if last_msg_id >= last_covered_id + self.summarization_threshold:
+                    await self.summarize_history_for_character(char_name)
 
     async def summarize_history_for_character(self, character_name: str):
         # Get the last covered message ID for this character
@@ -438,7 +443,7 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
         )
 
     def get_latest_dialogue(self, character_name: str) -> str:
-                # Use the *per-character visible messages*
+        # Use the *per-character visible messages*
         visible_history = self.get_visible_history_for_character(character_name)
         recent_msgs = visible_history[-self.recent_dialogue_lines:]
 
@@ -457,6 +462,7 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
 
         latest_dialogue = "\n".join(formatted_dialogue_lines)
         return latest_dialogue
+
     #
     # Prompt-building
     #
@@ -776,7 +782,7 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
             self.session_id,
             character_name,
             new_appearance,
-            triggered_by_message_id=triggered_message_id  # Corrected variable name
+            triggered_by_message_id=triggered_message_id
         )
         if updated:
             logger.info(f"Character '{character_name}' updated appearance subfields: {new_appearance.dict()}")
@@ -1039,4 +1045,3 @@ If no changes are needed, simply repeat the existing plan in the same JSON forma
         if old_steps != new_steps:
             changes.append(f"Steps changed from {old_steps} to {new_steps}.")
         return " ".join(changes)
-
