@@ -57,6 +57,7 @@ class ChatManager:
         # Summarization config
         self.summarization_threshold = self.config.get('summarization_threshold', 20)
         self.recent_dialogue_lines = self.config.get('recent_dialogue_lines', 5)
+        # The count of messages that get summarized (and hidden) when threshold is reached:
         self.to_summarize_count = self.summarization_threshold - self.recent_dialogue_lines
 
         self.validation_loop_setting = self.config.get('validation_loop', 1)
@@ -244,12 +245,13 @@ class ChatManager:
         """
         When adding a message:
          - We'll store it in the messages table (legacy visible=1).
-         - Then we also mark it as visible for each character in the session (via message_visibility).
+         - Then we also mark it as visible for each character in the session.
+         - Then we check and perform summarization if needed.
         """
         if message_type == "system" or message.strip() == "...":
             return None
 
-        # Convert subfields of new_appearance to simple strings if not None
+        # Convert subfields of new_appearance to strings if not None
         hair_val = (new_appearance.hair.strip() if new_appearance and new_appearance.hair else "")
         cloth_val = (new_appearance.clothing.strip() if new_appearance and new_appearance.clothing else "")
         acc_val = (new_appearance.accessories_and_held_items.strip() if new_appearance and new_appearance.accessories_and_held_items else "")
@@ -290,162 +292,146 @@ class ChatManager:
     # Summarization
     #
     async def check_summarization(self):
+        """
+        Check for each character we manage if the number of currently visible messages 
+        meets or exceeds the summarization threshold. If so, summarize the oldest block of 
+        messages (up to self.to_summarize_count) and hide them. Keep the newest messages visible 
+        (at least self.recent_dialogue_lines).
+        """
+        # Summarize for all characters who have participated
         all_msgs = self.db.get_messages(self.session_id)
         if not all_msgs:
             return
 
-        last_msg_id = all_msgs[-1]['id']
-
-        # Summarize for all characters who have participated
         participants = set(m["sender"] for m in all_msgs if m["message_type"] in ["user", "character"])
         for char_name in participants:
-            # Only summarize for characters we actively manage, ignoring "You" or others
-            if char_name in self.characters:
-                last_covered_id = self.db.get_latest_covered_message_id(self.session_id, char_name)
-                # Only trigger summarization if we have at least 'summarization_threshold' new messages
-                # since the last covered message ID.
-                if last_msg_id >= last_covered_id + self.summarization_threshold:
-                    await self.summarize_history_for_character(char_name)
+            # Only summarize for characters we actively manage
+            if char_name not in self.characters:
+                continue
+
+            # Check how many messages are currently visible for this character
+            visible_for_char = self.db.get_visible_messages_for_character(self.session_id, char_name)
+            if len(visible_for_char) >= self.summarization_threshold:
+                await self.summarize_history_for_character(char_name)
 
     async def summarize_history_for_character(self, character_name: str):
-        # Get the last covered message ID for this character
-        last_covered_id = self.db.get_latest_covered_message_id(self.session_id, character_name)
+        """
+        Summarize and hide the oldest messages in blocks whenever the total 
+        visible messages >= summarization_threshold. We always keep the newest 
+        self.recent_dialogue_lines messages visible, so the oldest block of size 
+        self.to_summarize_count is summarized and hidden each time this triggers.
+        """
+        summarize_llm = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml')
+        
+        # Keep summarizing in blocks if there are enough visible messages
+        while True:
+            msgs = self.db.get_visible_messages_for_character(self.session_id, character_name)
+            if len(msgs) < self.summarization_threshold:
+                # If fewer than threshold, no more summarization needed
+                break
 
-        # Retrieve only visible messages for this character
-        msgs = self.db.get_visible_messages_for_character(self.session_id, character_name)
-        relevant_msgs = [
-            (
-                m["id"],
-                m["sender"],
-                m["message"],
-                m["affect"],
-                m.get("purpose", None),
-                m.get("why_purpose", None),
-                m.get("why_affect", None),
-                m.get("why_action", None),
-                m.get("why_dialogue", None),
-                m.get("why_new_location", None),
-                m.get("why_new_appearance", None),
+            # Sort them ascending by ID so oldest come first
+            msgs.sort(key=lambda x: x['id'])
+
+            # We'll summarize the oldest to_summarize_count from these
+            chunk = msgs[: self.to_summarize_count]
+            chunk_ids = [m['id'] for m in chunk]
+
+            # Build summarization text from that chunk
+            history_lines = []
+            max_message_id_in_chunk = 0
+            for m in chunk:
+                mid = m["id"]
+                sender = m["sender"]
+                message = m["message"]
+                affect = m.get("affect", None)
+                purpose = m.get("purpose", None)
+                why_purpose = m.get("why_purpose", None)
+                why_affect = m.get("why_affect", None)
+                why_action = m.get("why_action", None)
+                why_dialogue = m.get("why_dialogue", None)
+                why_new_location = m.get("why_new_location", None)
+                why_new_appearance = m.get("why_new_appearance", None)
+
+                if mid > max_message_id_in_chunk:
+                    max_message_id_in_chunk = mid
+
+                if sender == character_name:
+                    line_parts = [f"{sender}:"]
+                    line_parts.append(f"(Affect={affect}, Purpose={purpose})")
+                    if why_purpose: 
+                        line_parts.append(f"why_purpose={why_purpose}")
+                    if why_affect:
+                        line_parts.append(f"why_affect={why_affect}")
+                    if why_action:
+                        line_parts.append(f"why_action={why_action}")
+                    if why_dialogue:
+                        line_parts.append(f"why_dialogue={why_dialogue}")
+                    if why_new_location:
+                        line_parts.append(f"why_new_location={why_new_location}")
+                    if why_new_appearance:
+                        line_parts.append(f"why_new_appearance={why_new_appearance}")
+
+                    line_parts.append(f"Message={message}")
+                    line = " | ".join(line_parts)
+                else:
+                    line = f"{sender}: {message}"
+
+                history_lines.append(line)
+
+            # Check for plan changes in this range
+            plan_changes_notes = []
+            plan_changes = self.db.get_plan_changes_for_range(
+                self.session_id,
+                character_name,
+                0,  # We no longer rely on a 'last_covered_id', so start from 0
+                max_message_id_in_chunk
             )
-            for m in msgs
-            if m["id"] > last_covered_id and m["message_type"] != "system"
-        ]
+            for pc in plan_changes:
+                note = f"Plan changed (message {pc['triggered_by_message_id']}): {pc['change_summary']}"
+                if 'why_new_plan_goal' in pc and pc['why_new_plan_goal']:
+                    note += f" Reason: {pc['why_new_plan_goal']}"
+                plan_changes_notes.append(note)
 
-        # **Sort relevant_msgs in ascending order by message ID (oldest first)**
-        relevant_msgs.sort(key=lambda m: m[0])  # Assuming m[0] is the message ID
+            plan_changes_text = ""
+            if plan_changes_notes:
+                plan_changes_text = (
+                    "\n\nAdditionally, the following plan changes occurred:\n"
+                    + "\n".join(plan_changes_notes)
+                )
 
-        if not relevant_msgs:
-            logger.debug(f"No new relevant messages to summarize for '{character_name}'.")
-            return
+            history_text = "\n".join(history_lines) + plan_changes_text
 
-        # Summarize only up to self.to_summarize_count
-        to_summarize = relevant_msgs[:self.to_summarize_count]
-
-        covered_up_to_message_id = to_summarize[-1][0] if to_summarize else last_covered_id
-
-        logger.debug(
-            f"Summarizing history for '{character_name}'. "
-            f"Messages to summarize: {len(to_summarize)}. "
-            f"Covering up to message ID: {covered_up_to_message_id}."
-        )
-
-        history_lines = []
-        max_message_id_in_chunk = 0
-        for (
-            mid, sender, message, affect, purpose,
-            why_purpose, why_affect, why_action,
-            why_dialogue, why_new_location, why_new_appearance
-        ) in to_summarize:
-
-            if mid > max_message_id_in_chunk:
-                max_message_id_in_chunk = mid
-
-            if sender == character_name:
-                line_parts = [f"{sender}:"]
-                line_parts.append(f"(Affect={affect}, Purpose={purpose})")
-                if why_purpose: 
-                    line_parts.append(f"why_purpose={why_purpose}")
-                if why_affect:
-                    line_parts.append(f"why_affect={why_affect}")
-                if why_action:
-                    line_parts.append(f"why_action={why_action}")
-                if why_dialogue:
-                    line_parts.append(f"why_dialogue={why_dialogue}")
-                if why_new_location:
-                    line_parts.append(f"why_new_location={why_new_location}")
-                if why_new_appearance:
-                    line_parts.append(f"why_new_appearance={why_new_appearance}")
-
-                line_parts.append(f"Message={message}")
-                line = " | ".join(line_parts)
-            else:
-                line = f"{sender}: {message}"
-
-            history_lines.append(line)
-
-        plan_changes_notes = []
-        plan_changes = self.db.get_plan_changes_for_range(
-            self.session_id,
-            character_name,
-            last_covered_id,
-            max_message_id_in_chunk
-        )
-        for pc in plan_changes:
-            note = f"Plan changed (message {pc['triggered_by_message_id']}): {pc['change_summary']}"
-            # If the DB includes the new reason field, include it:
-            if 'why_new_plan_goal' in pc and pc['why_new_plan_goal']:
-                note += f" Reason: {pc['why_new_plan_goal']}"
-            plan_changes_notes.append(note)
-
-        plan_changes_text = ""
-        if plan_changes_notes:
-            plan_changes_text = (
-                "\n\nAdditionally, the following plan changes occurred:\n"
-                + "\n".join(plan_changes_notes)
-            )
-
-        history_text = "\n".join(history_lines) + plan_changes_text
-
-        prompt = f"""You creating a concise summary **from {character_name}'s perspective**.
+            prompt = f"""You are creating a concise summary **from {character_name}'s perspective**.
 Focus on newly revealed or changed details (feelings, location, appearance, important topic shifts, interpersonal dynamics).
 Incorporate any 'why_*' information to clarify motivations or changes in mind/goals.
 Also note any important plan changes or newly revealed steps in the plan. 
-Avoid restating old environment details unless crucial changes occured. Avoid redundancy and stay concise.
+Avoid restating old environment details unless crucial changes occurred. Avoid redundancy and stay concise.
 
-Recent events to summarize:
+Messages to summarize:
 {history_text}
 
-Now produce a short summary from {character_name}'s viewpoint, emphasizing why changes happened when relevant. You do not need to include every detail, just the most important ones. Also you do not need to summarize your own summary.
+Now produce a short summary from {character_name}'s viewpoint, emphasizing why changes happened when relevant.
+You do not need to summarize your own summary. 
 """
 
-        logger.debug(f"Summarization prompt for '{character_name}':\n{prompt}")
+            logger.debug(f"Summarization prompt for '{character_name}':\n{prompt}")
+            new_summary = await asyncio.to_thread(summarize_llm.generate, prompt=prompt)
 
-        summarize_llm = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml')
-        new_summary = await asyncio.to_thread(summarize_llm.generate, prompt=prompt)
+            if not new_summary:
+                new_summary = "No significant new events."
 
-        logger.debug(f"Summarization response for '{character_name}': {new_summary}")
+            # Save the summary into DB
+            self.db.save_new_summary(self.session_id, character_name, new_summary, max_message_id_in_chunk)
 
-        if not new_summary:
-            new_summary = "No significant new events."
+            # Hide the summarized messages completely
+            self.db.hide_messages_for_character(self.session_id, character_name, chunk_ids)
 
-        self.db.save_new_summary(self.session_id, character_name, new_summary, covered_up_to_message_id)
+            logger.info(
+                f"Summarized and concealed a block of {len(chunk)} messages for '{character_name}'. "
+                f"Newest remaining count: {len(self.db.get_visible_messages_for_character(self.session_id, character_name))}."
+            )
 
-        # Hide old messages for this character, except the last self.recent_dialogue_lines
-        to_hide_ids = [m[0] for m in to_summarize]
-        if len(to_hide_ids) > self.recent_dialogue_lines:
-            ids_to_hide = to_hide_ids[:-self.recent_dialogue_lines]
-        else:
-            ids_to_hide = []
-
-        if ids_to_hide:
-            self.db.hide_messages_for_character(self.session_id, character_name, ids_to_hide)
-            logger.debug(f"Hid message IDs for '{character_name}': {ids_to_hide}")
-
-        logger.info(
-            f"Summarized and concealed old messages for '{character_name}', "
-            f"up to message ID {covered_up_to_message_id}."
-        )
-        
     def get_latest_dialogue(self, character_name: str) -> str:
         # Use the *per-character visible messages*
         visible_history = self.get_visible_history_for_character(character_name)
@@ -601,7 +587,6 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
     def stop_automatic_chat(self):
         self.automatic_running = False
 
-
     #
     # BUG 2 FIX: Update/evaluate plan BEFORE generating the next interaction
     #
@@ -669,10 +654,10 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
                     why_new_location=final_interaction.why_new_location,
                     why_new_appearance=final_interaction.why_new_appearance,
                     new_location=final_interaction.new_location.strip() if final_interaction.new_location.strip() else None,
-                    new_appearance=final_interaction.new_appearance  # Pass the object as is
+                    new_appearance=final_interaction.new_appearance
                 )
 
-                # Handle appearance subfields separately
+                # Handle location/appearance
                 if final_interaction.new_location.strip():
                     await self.handle_new_location_for_character(character_name, final_interaction.new_location, msg_id)
                 if final_interaction.new_appearance and any([
@@ -717,7 +702,6 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
 
             if isinstance(introduction_response, CharacterIntroductionOutput):
                 intro_text = introduction_response.introduction_text.strip()
-                # We'll store the five subfields
                 app_seg = introduction_response.current_appearance
                 loc = introduction_response.current_location.strip()
 
@@ -730,11 +714,9 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
                     message_type="character"
                 )
 
-                # If there is a location, handle it
                 if loc:
                     await self.handle_new_location_for_character(character_name, loc, msg_id)
 
-                # Convert to AppearanceSegments for DB
                 new_app_segments = AppearanceSegments(
                     hair=app_seg.hair,
                     clothing=app_seg.clothing,
@@ -779,9 +761,6 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
             logger.info(f"Character '{character_name}' moved/updated location to '{new_location}'.")
 
     async def handle_new_appearance_for_character(self, character_name: str, new_appearance: AppearanceSegments, triggered_message_id: int) -> bool:
-        """
-        Handle updating a character's appearance based on new_appearance data.
-        """
         updated = self.db.update_character_appearance(
             self.session_id,
             character_name,
@@ -794,8 +773,8 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
 
     def get_all_visible_messages(self) -> List[Dict]:
         """
-        This method is kept for UI calls that simply want all messages from the 'messages' table.
-        It does NOT reflect per-character visibility. We keep it only for backward compatibility.
+        Kept for UI calls that simply want all messages from the 'messages' table.
+        Does NOT reflect per-character visibility.
         """
         visible_msgs = self.db.get_messages(self.session_id)
         return [m for m in visible_msgs if m["message_type"] in ("user","character","assistant","system")]
@@ -811,7 +790,6 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
         initial_interaction: Interaction
     ) -> Optional[Interaction]:
         if self.validation_loop_setting == 0:
-            # If no validation pass is wanted, simply return the initial interaction as-is
             return initial_interaction
 
         validation_client = OllamaClient(
@@ -933,7 +911,6 @@ Only produce valid JSON with these two top-level keys: "is_valid" and "corrected
         current_appearance = self.db.get_character_appearance(self.session_id, character_name)
         character_description = self.characters[character_name].character_description
 
-        # Prompt to request "why_new_plan_goal" field as well
         system_prompt = f"""
 You are an expert assistant in crafting and refining long-term plans for narrative characters. Your primary responsibility is to ensure that {character_name}'s plan is practical, achievable within hours or days, and tailored to their current context, including their location and appearance and recent events. Each plan consists of:
 
@@ -1003,7 +980,7 @@ If no changes are needed, simply repeat the existing plan in the same JSON forma
             new_steps = new_plan.steps
             new_why = new_plan.why_new_plan_goal.strip()
 
-            # If the LLM didn't provide a reason but changed the plan, fill something minimal:
+            # If no reason but changed something, fill minimal reason
             if not new_why and ((new_goal != old_goal) or (new_steps != old_steps)):
                 new_why = "No specific reason was provided, but the plan was updated."
 
