@@ -331,12 +331,16 @@ class ChatManager:
             if m["id"] > last_covered_id and m["message_type"] != "system"
         ]
 
+        # **Sort relevant_msgs in ascending order by message ID (oldest first)**
+        relevant_msgs.sort(key=lambda m: m[0])  # Assuming m[0] is the message ID
+
         if not relevant_msgs:
             logger.debug(f"No new relevant messages to summarize for '{character_name}'.")
             return
 
         # Summarize only up to self.to_summarize_count
         to_summarize = relevant_msgs[:self.to_summarize_count]
+
         covered_up_to_message_id = to_summarize[-1][0] if to_summarize else last_covered_id
 
         logger.debug(
@@ -402,16 +406,16 @@ class ChatManager:
 
         history_text = "\n".join(history_lines) + plan_changes_text
 
-        prompt = f"""You are summarizing the conversation **from {character_name}'s perspective**.
+        prompt = f"""You creating a concise summary **from {character_name}'s perspective**.
 Focus on newly revealed or changed details (feelings, location, appearance, important topic shifts, interpersonal dynamics).
 Incorporate any 'why_*' information to clarify motivations or changes in mind/goals.
-Also note any plan changes or newly revealed steps in the plan. 
-Avoid restating old environment details unless crucial.
+Also note any important plan changes or newly revealed steps in the plan. 
+Avoid restating old environment details unless crucial changes occured. Avoid redundancy and stay concise.
 
 Recent events to summarize:
 {history_text}
 
-Now produce a short summary from {character_name}'s viewpoint, emphasizing why changes happened when relevant.
+Now produce a short summary from {character_name}'s viewpoint, emphasizing why changes happened when relevant. You do not need to include every detail, just the most important ones. Also you do not need to summarize your own summary.
 """
 
         logger.debug(f"Summarization prompt for '{character_name}':\n{prompt}")
@@ -441,7 +445,7 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
             f"Summarized and concealed old messages for '{character_name}', "
             f"up to message ID {covered_up_to_message_id}."
         )
-
+        
     def get_latest_dialogue(self, character_name: str) -> str:
         # Use the *per-character visible messages*
         visible_history = self.get_visible_history_for_character(character_name)
