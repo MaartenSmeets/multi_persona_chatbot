@@ -66,7 +66,7 @@ You are {character_name}.
 ## Output Requirements ##
 - **Generate a structured JSON object** with the fields "introduction_text", "current_appearance", and "current_location".
 - The "current_appearance" field must be an object with the keys "hair", "clothing", "accessories_and_held_items", "posture_and_body_language", and "other_relevant_details".
-- **Ensure all fields are thoroughly and accurately filled** based on the character's attributes and the current context.
+- **Ensure all fields are thoroughly and accurately filled** based on the character's attributes and the current context, especially the introduction_text.
 - **Verify completeness**: The introduction_text and each appearance subfield must meaningfully describe the character's current state.
 - **Maintain a clear and logical flow** in the descriptions to facilitate easy visualization by the reader.
 - **Avoid repetition** by ensuring each detail is unique and contributes to the overall immersive portrayal.
@@ -81,7 +81,7 @@ You are {character_name}.
 Produce a JSON object with the following fields:
 
 {{
-  "introduction_text": "<Your detailed introduction here>",
+  "introduction_text": "<Your detailed introduction here. This is very important and should be detailed!>",
   "current_appearance": {{
     "hair": "<...>",
     "clothing": "<...>",
