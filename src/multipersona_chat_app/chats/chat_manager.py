@@ -958,11 +958,11 @@ Your focus is to create plans that are logical, detailed, and aligned with the {
 **Instructions:**
 - Review {character_name}'s existing plan and the current context for {character_name}.
 - Determine if {character_name}'s plan needs to be revised based on any changes.
-- Ensure that the steps are actionable, concrete, sequential, and start from the current location, appearance and [Latest] line.
+- Ensure that the steps are actionable, concrete, sequential, and very important **start from the current location, appearance and [Latest] line**.
 - By the final step, the goal should be achieved.
 - If revisions are necessary:
-    - The "goal" might change or remain the same.
-    - Modify the "steps" as needed by adding, removing, or updating them.
+    - The "goal" might change or remain the same. When the goal changes, revise the steps accordingly.
+    - Modify the "steps" as needed by adding, removing, or updating them. Make sure starting from the current location, appearance and [Latest] line. Completed steps should be removed.
 - Also provide a short explanation why {character_name} changes his steps/plan/goal in "why_new_plan_goal".
 
 Update or confirm the plan if needed. Output strictly in JSON:
