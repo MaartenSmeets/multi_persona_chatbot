@@ -164,7 +164,6 @@ cython_debug/
 #.idea/
 src/multipersona_chat_app/characters/maika.yaml
 src/multipersona_chat_app/characters/ruby.yaml
-src/multipersona_chat_app/characters/victor.yaml
-src/multipersona_chat_app/characters/luna.yaml
+src/multipersona_chat_app/characters/kael.yaml
 src/multipersona_chat_app/config/settings.yaml
 
