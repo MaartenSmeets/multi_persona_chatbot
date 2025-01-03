@@ -1,5 +1,3 @@
-# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/chats/chat_manager.py
-
 import os
 import logging
 from typing import List, Dict, Tuple, Optional
@@ -381,24 +379,29 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
             )
 
     def get_latest_dialogue(self, character_name: str) -> str:
+        """
+        We gather the last few visible lines of conversation from the perspective
+        of `character_name`. The final line is tagged with "[Latest]" instead of
+        inserting something like 'Latest Dialogue Line:' into the user text.
+        """
         visible_history = self.get_visible_history_for_character(character_name)
         recent_msgs = visible_history[-self.recent_dialogue_lines:]
 
         formatted_dialogue_lines = []
-        for msg in recent_msgs:
+        for i, msg in enumerate(recent_msgs):
             if msg['sender'] == self.you_name and msg['message_type'] == 'user':
                 affect = msg.get('affect', 'N/A')
                 purpose = msg.get('purpose', 'N/A')
                 line = f"You [Affect: {affect}, Purpose: {purpose}]: {msg['message']}"
             else:
                 line = f"{msg['sender']}: {msg['message']}"
-            formatted_dialogue_lines.append(line)
+            # For the final line, mark it clearly but avoid polluting the actual user text
+            if i == len(recent_msgs) - 1:
+                formatted_dialogue_lines.append(f"[Latest] {line}")
+            else:
+                formatted_dialogue_lines.append(line)
 
-        if formatted_dialogue_lines:
-            formatted_dialogue_lines[-1] = f"### Latest Dialogue Line:\n{formatted_dialogue_lines[-1]}"
-
-        latest_dialogue = "\n".join(formatted_dialogue_lines)
-        return latest_dialogue
+        return "\n".join(formatted_dialogue_lines)
 
     def build_prompt_for_character(self, character_name: str) -> Tuple[str, str]:
         existing_prompts = self.db.get_character_prompts(self.session_id, character_name)
@@ -449,9 +452,9 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
         )
 
         visible_history = self.get_visible_history_for_character(character_name)
-        latest_dialogue = visible_history[-1]['message'] if visible_history else ""
-        if latest_dialogue:
-            latest_dialogue = f"### Latest Dialogue Line:\n{latest_dialogue}"
+        latest_text = visible_history[-1]['message'] if visible_history else ""
+        if latest_text:
+            latest_text = f"[Latest] {latest_text}"
 
         all_summaries = self.db.get_all_summaries(self.session_id, character_name)
         chat_history_summary = "\n\n".join(all_summaries) if all_summaries else ""
@@ -472,7 +475,7 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
             setting=setting_description,
             location=session_loc,
             chat_history_summary=chat_history_summary,
-            latest_dialogue=latest_dialogue,
+            latest_dialogue=latest_text,
             current_appearance=self.db.get_character_appearance(self.session_id, character_name)
         )
         return system_prompt, user_prompt
@@ -833,10 +836,6 @@ Only produce valid JSON with these two top-level keys: "is_valid" and "corrected
 
             for line_obj in recent_speaker_lines:
                 old_msg = line_obj["message"]
-                # Because we store the action+dialogue in the same 'message', we might separate them,
-                # or just compare them in total. Let's do both approaches:
-                # 1) If the old message contained "*some action*\nsome dialogue", we can compare the lines separately.
-                # But for simplicity, compare with the entire message.
                 old_embedding = embed_client.get_embedding(old_msg)
                 if old_embedding:
                     # Compare with action
@@ -849,13 +848,13 @@ Only produce valid JSON with these two top-level keys: "is_valid" and "corrected
                     if sim_dialogue >= self.similarity_threshold:
                         is_dialogue_similar = True
                     
-                    # Compare with both
+                    # Compare combined
                     sim_actiondialogue = embed_client.compute_cosine_similarity(actiondialogue_embedding, old_embedding)
                     if sim_actiondialogue >= self.similarity_threshold:
                         is_actiondialogue_similar = True
 
             if not is_action_similar and not is_dialogue_similar and not is_actiondialogue_similar:
-                # Good to go
+                logger.info("Similarity check passed! No repetition detected.")
                 return current_interaction
 
             tries += 1
@@ -874,17 +873,15 @@ Only produce valid JSON with these two top-level keys: "is_valid" and "corrected
 
             extra_instruction = f"""
 IMPORTANT: {repetition_warning}
-The current suggestion for an interaction includes the action (`{current_interaction.action}`) and dialogue (`{current_interaction.dialogue}`). Please revise your next interaction so that it is clearly different from these in the following ways:
-- It should not be repetitive or nearly identical to any of your recent lines.
-- It must move the story forward.
-- It should reflect your character's motivations and context.
-- It must avoid loops about the same topic without progression.
+The current suggestion includes the action: (“{current_interaction.action}”)
+and the dialogue: (“{current_interaction.dialogue}”).
+Please revise your next interaction so that it is clearly different from these,
+avoids repetition, and moves the story forward.
 """
 
             # Let's append the extra instruction to the dynamic_prompt
             revised_prompt = dynamic_prompt + "\n\n" + extra_instruction
 
-            # Regenerate
             regen_client = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml', output_model=Interaction)
             new_interaction = await asyncio.to_thread(
                 regen_client.generate,
@@ -954,7 +951,7 @@ Your focus is to create plans that are logical, detailed, and aligned with the {
 **Instructions:**
 - Review {character_name}'s existing plan and the current context for {character_name}.
 - Determine if {character_name}'s plan needs to be revised based on any changes.
-- Ensure that the steps are actionable, concrete, sequential, and start from the current location, appearance and ### Latest Dialogue Line.
+- Ensure that the steps are actionable, concrete, sequential, and start from the current location, appearance and [Latest] line.
 - By the final step, the goal should be achieved.
 - If revisions are necessary:
     - The "goal" might change or remain the same.

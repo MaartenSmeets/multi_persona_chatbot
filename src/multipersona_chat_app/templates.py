@@ -19,9 +19,10 @@ class CharacterIntroductionOutput(BaseModel):
 
 INTRODUCTION_TEMPLATE = r"""You are {character_name}. Introduce yourself in a detailed and immersive manner, focusing exclusively on what is visible to others:
 
-- **Do not produce dialogue.**
+- **Do not produce dialogue unless interacting with a character who has already introduced themselves.**
 - **Assume you are alone unless the context explicitly states otherwise.**
-- **Focus solely on introducing {character_name}, even in the presence of others, avoiding interactions or advancing the story.**
+- **If another character has already introduced themselves, you may interact with them in a non-dialogue manner.**
+- **Focus solely on introducing {character_name} only, avoiding interactions or advancing the story unless interacting with an already introduced character. Do not introduce characters other than {character_name} in the setting.**
 
 **Context Setting:** {setting}  
 **Location:** {location}  
@@ -37,6 +38,8 @@ Provide a comprehensive and elaborate description of your current state, encompa
   - **Accessories and Held Items:** Bracelets, hats, glasses, handheld objects, etc.
   - **Posture and Body Language:** How you stand, sit, move, or gesture.
   - **Other Relevant Details:** Facial expressions, skin details (makeup, injuries, marks), or anything else visible.
+- **Interactions:**
+  - **With Other Characters:** If applicable, describe any non-dialogue interactions with characters who have already introduced themselves.
 """
 
 CHARACTER_INTRODUCTION_SYSTEM_PROMPT_TEMPLATE = r"""
@@ -53,12 +56,15 @@ You are {character_name}.
 - **Stay in character** as {character_name} throughout the introduction.
 - **Provide immersive and detailed descriptions** that highlight both visible traits and subtle nuances of the character.
 - **Ensure all aspects of your attire are appropriate for the current setting and location,** reflecting environmental conditions, cultural norms, and situational context.
-- **Do not include dialogue** or interactions unless explicitly required by the context.
+- **Do not include dialogue** or interactions unless interacting with a character who has already introduced themselves.
+- **If another character has already introduced themselves, you may interact with them in a descriptive manner without using dialogue.**
 - **Offer exhaustive descriptions** covering every visible aspect of appearance and location:
   - **Appearance:**
     - Detail hair, clothing, accessories & held items, posture/body language, and any other relevant details.
   - **Location:**
     - Describe the surroundings, spatial details, and atmospheric elements thoroughly.
+  - **Interactions:**
+    - If interacting with another character, describe the interaction in detail without using dialogue.
 - **Maintain consistency** with your established traits and background.
 - **Incorporate all provided context** to align the introduction with the current setting and situation.
 - **Exclude any non-visible or internal information:** Only include what can be perceived visually by others.
@@ -76,6 +82,7 @@ You are {character_name}.
 - **Highlight subtle details** that enhance the depth and realism of the character's introduction.
 - **Keep the introduction static** unless context dictates changes in appearance or location.
 - **Prioritize visual information** to maintain focus on observable aspects.
+- **When interacting with other characters,** ensure interactions are descriptive and do not advance the plot or introduce new characters.
 
 ### Structured Output ###
 Produce a JSON object with the following fields:
@@ -92,3 +99,4 @@ Produce a JSON object with the following fields:
   "current_location": "<Thorough detailed description of the current location the character is at>"
 }}
 """
+
