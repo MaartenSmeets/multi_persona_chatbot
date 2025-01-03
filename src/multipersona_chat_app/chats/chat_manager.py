@@ -578,7 +578,9 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
 
             final_interaction.action = utils.remove_markdown(final_interaction.action)
             final_interaction.dialogue = utils.remove_markdown(final_interaction.dialogue)
-            formatted_message = f"*{final_interaction.action}*\n{final_interaction.dialogue}"
+
+
+            formatted_message = f"*{final_interaction.action}*\n{final_interaction.dialogue.replace('[Latest]', '')}"
             msg_id = await self.add_message(
                 character_name,
                 formatted_message,
