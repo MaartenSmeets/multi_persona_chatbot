@@ -1,10 +1,13 @@
+# File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/llm/ollama_client.py
+
 import requests
 import logging
-from typing import Optional, Type
+from typing import Optional, Type, List
 from pydantic import BaseModel
 import yaml
 import json
 import os
+import numpy as np
 
 from db.cache_manager import CacheManager
 
@@ -157,3 +160,60 @@ class OllamaClient:
             except Exception as e:
                 logger.error(f"An error occurred: {e}")
                 return None
+
+    #
+    # NEW: Embedding and similarity helpers
+    #
+    def get_embedding(self, sentence: str) -> List[float]:
+        """
+        Generate an embedding for 'sentence' using the Ollama /api/embeddings endpoint.
+        """
+        url = self.config.get('api_url_embeddings') or "http://localhost:11434/api/embeddings"
+        model_name = self.config.get('embedding_model_name') or "snowflake-arctic-embed2"
+
+        headers = {'Content-Type': 'application/json'}
+        api_key = self.config.get('api_key')
+        if api_key:
+            headers['Authorization'] = f'Bearer {api_key}'
+
+        data = {
+            'model': model_name,
+            'prompt': sentence
+        }
+
+        log_headers = headers.copy()
+        if 'Authorization' in log_headers:
+            log_headers['Authorization'] = 'Bearer ***'
+
+        logger.info("Sending request to Ollama Embeddings API")
+        logger.info(f"Request URL: {url}")
+        logger.info(f"Request Headers: {log_headers}")
+        logger.info(f"Request Payload: {data}")
+
+        try:
+            response = requests.post(url, headers=headers, data=json.dumps(data))
+            logger.info(f"Received response with status code: {response.status_code}")
+            logger.info(f"Response Headers: {response.headers}")
+            response.raise_for_status()
+            emb_data = response.json().get('embedding', [])
+            logger.debug(f"Embedding data received: {emb_data}")
+            return emb_data
+        except requests.exceptions.RequestException as e:
+            logger.error(f"RequestException while fetching embedding: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Error fetching embedding: {e}")
+            return []
+
+    def compute_cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
+        """
+        Compute cosine similarity between two embedding vectors.
+        """
+        if not vec1 or not vec2:
+            return 0.0
+        arr1 = np.array(vec1)
+        arr2 = np.array(vec2)
+        denom = (np.linalg.norm(arr1) * np.linalg.norm(arr2))
+        if denom == 0:
+            return 0.0
+        return float(np.dot(arr1, arr2) / denom)

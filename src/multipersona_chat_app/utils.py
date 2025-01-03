@@ -6,6 +6,7 @@ import yaml
 import logging
 from models.character import Character
 from typing import List, Dict
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -47,3 +48,25 @@ def get_available_characters(directory: str) -> Dict[str, Character]:
     except FileNotFoundError:
         logger.error(f"Characters directory '{directory}' not found.")
     return characters
+
+def remove_markdown(text):
+    """Remove Markdown formatting from the given text."""
+    # Remove Markdown headings
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+
+    # Remove Markdown bold and italic formatting
+    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)  # Bold
+    text = re.sub(r'\*(.*?)\*', r'\1', text)        # Italic
+    text = re.sub(r'__(.*?)__', r'\1', text)          # Bold with underscores
+    text = re.sub(r'_(.*?)_', r'\1', text)            # Italic with underscores
+
+    # Remove inline code formatting
+    text = re.sub(r'`([^`]*)`', r'\1', text)
+
+    # Remove strikethrough formatting
+    text = re.sub(r'~~(.*?)~~', r'\1', text)
+
+    # Remove any extra spacing or newlines
+    text = re.sub(r'\n{2,}', '\n', text)
+
+    return text.strip()

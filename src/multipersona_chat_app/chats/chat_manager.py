@@ -1,4 +1,5 @@
 # File: /home/maarten/multi_persona_chatbot/src/multipersona_chat_app/chats/chat_manager.py
+
 import os
 import logging
 from typing import List, Dict, Tuple, Optional
@@ -14,6 +15,7 @@ from templates import (
 )
 from models.interaction import Interaction, AppearanceSegments
 from pydantic import BaseModel, Field
+import utils
 import json
 
 import asyncio  # <-- used for async background calls
@@ -57,10 +59,13 @@ class ChatManager:
         # Summarization config
         self.summarization_threshold = self.config.get('summarization_threshold', 20)
         self.recent_dialogue_lines = self.config.get('recent_dialogue_lines', 5)
-        # The count of messages that get summarized (and hidden) when threshold is reached:
         self.to_summarize_count = self.summarization_threshold - self.recent_dialogue_lines
 
+        # Validation loop config
         self.validation_loop_setting = self.config.get('validation_loop', 1)
+
+        # New similarity threshold from config
+        self.similarity_threshold = self.config.get("similarity_threshold", 0.8)
 
         db_path = os.path.join("output", "conversations.db")
         self.db = DBManager(db_path)
@@ -118,7 +123,7 @@ class ChatManager:
     @property
     def current_location(self) -> Optional[str]:
         return self.db.get_current_location(self.session_id)
-    
+
     def set_current_setting(self, setting_name: str, setting_description: str, start_location: str):
         self.current_setting = setting_name
         self.db.update_current_setting(self.session_id, self.current_setting)
@@ -135,8 +140,8 @@ class ChatManager:
         self.characters[char_name] = char_instance
         current_session_loc = self.db.get_current_location(self.session_id) or ""
         self.db.add_character_to_session(
-            self.session_id, 
-            char_name, 
+            self.session_id,
+            char_name,
             initial_location=current_session_loc,
             initial_appearance=char_instance.appearance
         )
@@ -152,7 +157,6 @@ class ChatManager:
         else:
             logger.warning(f"No system/dynamic prompts found in YAML for '{char_name}'.")
 
-        # Ensure we do NOT assign a default plan; only create if it exists
         self.ensure_character_plan_exists(char_name)
 
     def remove_character(self, char_name: str):
@@ -161,9 +165,6 @@ class ChatManager:
         self.db.remove_character_from_session(self.session_id, char_name)
 
     def ensure_character_plan_exists(self, char_name: str):
-        """
-        Check if character plan is present in DB; if not, do nothing.
-        """
         plan_data = self.db.get_character_plan(self.session_id, char_name)
         if plan_data is None:
             logger.info(f"No existing plan for '{char_name}'. Not creating any default plan.")
@@ -196,36 +197,23 @@ class ChatManager:
 
         last_speaker = all_msgs[-1]['sender']
 
-        # If the last speaker was the user, return the first character
         if last_speaker == self.you_name:
             return chars[0]
 
-        # If the last speaker was a character, pick the next character in the list
         if last_speaker in chars:
             idx = chars.index(last_speaker)
             next_idx = (idx + 1) % len(chars)
             return chars[next_idx]
 
-        # Otherwise, default to the first character
         return chars[0]
 
     def advance_turn(self):
-        # This is still called by the UI, but no longer controls next speaker order.
-        # We keep it to avoid breaking references, but it does nothing now.
+        # No-op placeholder for UI usage
         pass
 
-    #
-    # NEW: get per-character visible history
-    #
     def get_visible_history_for_character(self, character_name: str) -> List[Dict]:
-        """
-        Return only the messages visible to that character (based on the new per-character visibility).
-        """
         return self.db.get_visible_messages_for_character(self.session_id, character_name)
 
-    #
-    # MAKE 'add_message' ASYNC to allow background summarization
-    #
     async def add_message(self,
                           sender: str,
                           message: str,
@@ -242,16 +230,9 @@ class ChatManager:
                           new_location: Optional[str] = None,
                           new_appearance: Optional[AppearanceSegments] = None
                          ) -> Optional[int]:
-        """
-        When adding a message:
-         - We'll store it in the messages table (legacy visible=1).
-         - Then we also mark it as visible for each character in the session.
-         - Then we check and perform summarization if needed.
-        """
         if message_type == "system" or message.strip() == "...":
             return None
 
-        # Convert subfields of new_appearance to strings if not None
         hair_val = (new_appearance.hair.strip() if new_appearance and new_appearance.hair else "")
         cloth_val = (new_appearance.clothing.strip() if new_appearance and new_appearance.clothing else "")
         acc_val = (new_appearance.accessories_and_held_items.strip() if new_appearance and new_appearance.accessories_and_held_items else "")
@@ -262,7 +243,7 @@ class ChatManager:
             self.session_id,
             sender,
             message,
-            True,  # keep old 'visible' field = 1 (for legacy)
+            True,
             message_type,
             affect,
             purpose,
@@ -280,64 +261,38 @@ class ChatManager:
             other_val
         )
 
-        # Now mark it as visible for each character in the session
         self.db.add_message_visibility_for_session_characters(self.session_id, message_id)
 
-        # Kick off summarization in the background
         await self.check_summarization()
 
         return message_id
 
-    #
-    # Summarization
-    #
     async def check_summarization(self):
-        """
-        Check for each character we manage if the number of currently visible messages 
-        meets or exceeds the summarization threshold. If so, summarize the oldest block of 
-        messages (up to self.to_summarize_count) and hide them. Keep the newest messages visible 
-        (at least self.recent_dialogue_lines).
-        """
-        # Summarize for all characters who have participated
         all_msgs = self.db.get_messages(self.session_id)
         if not all_msgs:
             return
 
         participants = set(m["sender"] for m in all_msgs if m["message_type"] in ["user", "character"])
         for char_name in participants:
-            # Only summarize for characters we actively manage
             if char_name not in self.characters:
                 continue
 
-            # Check how many messages are currently visible for this character
             visible_for_char = self.db.get_visible_messages_for_character(self.session_id, char_name)
             if len(visible_for_char) >= self.summarization_threshold:
                 await self.summarize_history_for_character(char_name)
 
     async def summarize_history_for_character(self, character_name: str):
-        """
-        Summarize and hide the oldest messages in blocks whenever the total 
-        visible messages >= summarization_threshold. We always keep the newest 
-        self.recent_dialogue_lines messages visible, so the oldest block of size 
-        self.to_summarize_count is summarized and hidden each time this triggers.
-        """
         summarize_llm = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml')
-        
-        # Keep summarizing in blocks if there are enough visible messages
+
         while True:
             msgs = self.db.get_visible_messages_for_character(self.session_id, character_name)
             if len(msgs) < self.summarization_threshold:
-                # If fewer than threshold, no more summarization needed
                 break
 
-            # Sort them ascending by ID so oldest come first
             msgs.sort(key=lambda x: x['id'])
-
-            # We'll summarize the oldest to_summarize_count from these
             chunk = msgs[: self.to_summarize_count]
             chunk_ids = [m['id'] for m in chunk]
 
-            # Build summarization text from that chunk
             history_lines = []
             max_message_id_in_chunk = 0
             for m in chunk:
@@ -359,7 +314,7 @@ class ChatManager:
                 if sender == character_name:
                     line_parts = [f"{sender}:"]
                     line_parts.append(f"(Affect={affect}, Purpose={purpose})")
-                    if why_purpose: 
+                    if why_purpose:
                         line_parts.append(f"why_purpose={why_purpose}")
                     if why_affect:
                         line_parts.append(f"why_affect={why_affect}")
@@ -379,12 +334,11 @@ class ChatManager:
 
                 history_lines.append(line)
 
-            # Check for plan changes in this range
             plan_changes_notes = []
             plan_changes = self.db.get_plan_changes_for_range(
                 self.session_id,
                 character_name,
-                0,  # We no longer rely on a 'last_covered_id', so start from 0
+                0,
                 max_message_id_in_chunk
             )
             for pc in plan_changes:
@@ -412,19 +366,13 @@ Messages to summarize:
 {history_text}
 
 Now produce a short summary from {character_name}'s viewpoint, emphasizing why changes happened when relevant.
-You do not need to summarize your own summary. 
 """
 
-            logger.debug(f"Summarization prompt for '{character_name}':\n{prompt}")
             new_summary = await asyncio.to_thread(summarize_llm.generate, prompt=prompt)
-
             if not new_summary:
                 new_summary = "No significant new events."
 
-            # Save the summary into DB
             self.db.save_new_summary(self.session_id, character_name, new_summary, max_message_id_in_chunk)
-
-            # Hide the summarized messages completely
             self.db.hide_messages_for_character(self.session_id, character_name, chunk_ids)
 
             logger.info(
@@ -433,7 +381,6 @@ You do not need to summarize your own summary.
             )
 
     def get_latest_dialogue(self, character_name: str) -> str:
-        # Use the *per-character visible messages*
         visible_history = self.get_visible_history_for_character(character_name)
         recent_msgs = visible_history[-self.recent_dialogue_lines:]
 
@@ -453,9 +400,6 @@ You do not need to summarize your own summary.
         latest_dialogue = "\n".join(formatted_dialogue_lines)
         return latest_dialogue
 
-    #
-    # Prompt-building
-    #
     def build_prompt_for_character(self, character_name: str) -> Tuple[str, str]:
         existing_prompts = self.db.get_character_prompts(self.session_id, character_name)
         if not existing_prompts:
@@ -466,7 +410,6 @@ You do not need to summarize your own summary.
 
         latest_dialogue = self.get_latest_dialogue(character_name)
 
-        # Retrieve character-specific summaries and join them
         all_summaries = self.db.get_all_summaries(self.session_id, character_name)
         chat_history_summary = "\n\n".join(all_summaries) if all_summaries else ""
 
@@ -494,7 +437,6 @@ You do not need to summarize your own summary.
             raise
 
         logger.debug(f"Built prompt for character '{character_name}':\n{formatted_prompt}")
-
         return system_prompt, formatted_prompt
 
     def build_introduction_prompts_for_character(self, character_name: str) -> Tuple[str, str]:
@@ -506,10 +448,8 @@ You do not need to summarize your own summary.
             appearance=char.appearance,
         )
 
-        # Use per-character visible messages
         visible_history = self.get_visible_history_for_character(character_name)
         latest_dialogue = visible_history[-1]['message'] if visible_history else ""
-        
         if latest_dialogue:
             latest_dialogue = f"### Latest Dialogue Line:\n{latest_dialogue}"
 
@@ -541,10 +481,7 @@ You do not need to summarize your own summary.
         char_locs = self.db.get_all_character_locations(self.session_id)
         char_apps = self.db.get_all_character_appearances(self.session_id)
         msgs = self.db.get_messages(self.session_id)
-        participants = set(
-            m["sender"] for m in msgs 
-            if m["message_type"] in ["user", "character"]
-        )
+        participants = set(m["sender"] for m in msgs if m["message_type"] in ["user", "character"])
 
         if not participants:
             session_loc = self.db.get_current_location(self.session_id)
@@ -565,10 +502,8 @@ You do not need to summarize your own summary.
                 logger.warning(f"Character '{c_name}' has no known location or appearance.")
             elif c_loc and not c_app:
                 parts.append(f"{c_name}'s location: {c_loc}")
-                logger.warning(f"Character '{c_name}' has no known appearance.")
             elif not c_loc and c_app:
                 parts.append(f"{c_name} has appearance: {c_app}")
-                logger.warning(f"Character '{c_name}' has no known location.")
             else:
                 parts.append(f"{c_name}'s location: {c_loc}, appearance: {c_app}")
         if not parts:
@@ -587,18 +522,13 @@ You do not need to summarize your own summary.
     def stop_automatic_chat(self):
         self.automatic_running = False
 
-    #
-    # BUG 2 FIX: Update/evaluate plan BEFORE generating the next interaction
-    #
     async def generate_character_message(self, character_name: str):
         logger.info(f"Generating message for character: {character_name}")
 
-        # First, update/evaluate the plan in case a recent message changed it
         all_msgs = self.db.get_messages(self.session_id)
         triggered_message_id = all_msgs[-1]['id'] if all_msgs else None
         await self.update_character_plan(character_name, triggered_message_id)
 
-        # If character hasn't introduced themselves yet, do that first
         char_spoken_before = any(
             m for m in all_msgs
             if m["sender"] == character_name and m["message_type"] == "character"
@@ -609,8 +539,6 @@ You do not need to summarize your own summary.
 
         try:
             system_prompt, formatted_prompt = self.build_prompt_for_character(character_name)
-
-            # Call the LLM for an Interaction result (async background)
             llm_client = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml', output_model=Interaction)
             interaction = await asyncio.to_thread(
                 llm_client.generate,
@@ -619,69 +547,69 @@ You do not need to summarize your own summary.
                 use_cache=False
             )
 
-            logger.debug(f"Raw interaction type: {type(interaction)}, value: {interaction}")
-
             if not interaction:
                 logger.warning(f"No response for {character_name}. Not storing.")
                 return
-
             if not isinstance(interaction, Interaction):
-                logger.error(
-                    f"Received invalid interaction type from LLM. "
-                    f"Expected an Interaction object but got {type(interaction)}. Value: {interaction}"
-                )
+                logger.error(f"Invalid interaction type from LLM: {type(interaction)}. Value: {interaction}")
                 return
 
-            # Validate & possibly correct the interaction
+            # Validate & possibly correct
             validated = await self.validate_and_possibly_correct_interaction(
                 character_name, system_prompt, formatted_prompt, interaction
             )
-            if validated:
-                final_interaction = validated
-                formatted_message = f"*{final_interaction.action}*\n{final_interaction.dialogue}"
-
-                msg_id = await self.add_message(
-                    character_name,
-                    formatted_message,
-                    visible=True,
-                    message_type="character",
-                    affect=final_interaction.affect,
-                    purpose=final_interaction.purpose,
-                    why_purpose=final_interaction.why_purpose,
-                    why_affect=final_interaction.why_affect,
-                    why_action=final_interaction.why_action,
-                    why_dialogue=final_interaction.why_dialogue,
-                    why_new_location=final_interaction.why_new_location,
-                    why_new_appearance=final_interaction.why_new_appearance,
-                    new_location=final_interaction.new_location.strip() if final_interaction.new_location.strip() else None,
-                    new_appearance=final_interaction.new_appearance
-                )
-
-                # Handle location/appearance
-                if final_interaction.new_location.strip():
-                    await self.handle_new_location_for_character(character_name, final_interaction.new_location, msg_id)
-                if final_interaction.new_appearance and any([
-                    final_interaction.new_appearance.hair.strip(),
-                    final_interaction.new_appearance.clothing.strip(),
-                    final_interaction.new_appearance.accessories_and_held_items.strip(),
-                    final_interaction.new_appearance.posture_and_body_language.strip(),
-                    final_interaction.new_appearance.other_relevant_details.strip()
-                ]):
-                    await self.handle_new_appearance_for_character(
-                        character_name,
-                        AppearanceSegments(
-                            hair=final_interaction.new_appearance.hair,
-                            clothing=final_interaction.new_appearance.clothing,
-                            accessories_and_held_items=final_interaction.new_appearance.accessories_and_held_items,
-                            posture_and_body_language=final_interaction.new_appearance.posture_and_body_language,
-                            other_relevant_details=final_interaction.new_appearance.other_relevant_details
-                        ),
-                        msg_id
-                    )
-                logger.debug(f"Valid message stored for {character_name}: {final_interaction.dialogue}")
-            else:
+            if not validated:
                 logger.warning(f"Interaction for {character_name} could not be validated or corrected. Not storing.")
+                return
 
+            # Check for repetitive lines
+            final_interaction = await self.check_and_regenerate_if_repetitive(
+                character_name, system_prompt, formatted_prompt, validated
+            )
+            if not final_interaction:
+                logger.warning(f"Repetitive interaction could not be resolved for {character_name}.")
+                return
+
+            final_interaction.action = utils.remove_markdown(final_interaction.action)
+            final_interaction.dialogue = utils.remove_markdown(final_interaction.dialogue)
+            formatted_message = f"*{final_interaction.action}*\n{final_interaction.dialogue}"
+            msg_id = await self.add_message(
+                character_name,
+                formatted_message,
+                visible=True,
+                message_type="character",
+                affect=final_interaction.affect,
+                purpose=final_interaction.purpose,
+                why_purpose=final_interaction.why_purpose,
+                why_affect=final_interaction.why_affect,
+                why_action=final_interaction.why_action,
+                why_dialogue=final_interaction.why_dialogue,
+                why_new_location=final_interaction.why_new_location,
+                why_new_appearance=final_interaction.why_new_appearance,
+                new_location=final_interaction.new_location.strip() if final_interaction.new_location.strip() else None,
+                new_appearance=final_interaction.new_appearance
+            )
+
+            if final_interaction.new_location.strip():
+                await self.handle_new_location_for_character(character_name, final_interaction.new_location, msg_id)
+            if final_interaction.new_appearance and any([
+                final_interaction.new_appearance.hair.strip(),
+                final_interaction.new_appearance.clothing.strip(),
+                final_interaction.new_appearance.accessories_and_held_items.strip(),
+                final_interaction.new_appearance.posture_and_body_language.strip(),
+                final_interaction.new_appearance.other_relevant_details.strip()
+            ]):
+                await self.handle_new_appearance_for_character(
+                    character_name,
+                    AppearanceSegments(
+                        hair=final_interaction.new_appearance.hair,
+                        clothing=final_interaction.new_appearance.clothing,
+                        accessories_and_held_items=final_interaction.new_appearance.accessories_and_held_items,
+                        posture_and_body_language=final_interaction.new_appearance.posture_and_body_language,
+                        other_relevant_details=final_interaction.new_appearance.other_relevant_details
+                    ),
+                    msg_id
+                )
         except Exception as e:
             logger.error(f"Error generating message for {character_name}: {e}", exc_info=True)
 
@@ -704,8 +632,6 @@ You do not need to summarize your own summary.
                 intro_text = introduction_response.introduction_text.strip()
                 app_seg = introduction_response.current_appearance
                 loc = introduction_response.current_location.strip()
-
-                logger.info(f"Introduction generated for {character_name}. Text: {intro_text}")
 
                 msg_id = await self.add_message(
                     character_name,
@@ -732,9 +658,7 @@ You do not need to summarize your own summary.
 
         except Exception as e:
             logger.error(f"Error generating introduction for {character_name}: {e}", exc_info=True)
-            return
 
-        # Now generate the initial plan for this character
         await self.update_character_plan(character_name, triggered_message_id=None)
 
     def get_session_name(self) -> str:
@@ -747,9 +671,6 @@ You do not need to summarize your own summary.
     def get_introduction_template(self) -> str:
         return INTRODUCTION_TEMPLATE
 
-    #
-    # Apply changes for new location/appearance
-    #
     async def handle_new_location_for_character(self, character_name: str, new_location: str, triggered_message_id: int):
         updated = self.db.update_character_location(
             self.session_id,
@@ -758,7 +679,7 @@ You do not need to summarize your own summary.
             triggered_by_message_id=triggered_message_id
         )
         if updated:
-            logger.info(f"Character '{character_name}' moved/updated location to '{new_location}'.")
+            logger.info(f"Character '{character_name}' location updated to '{new_location}'.")
 
     async def handle_new_appearance_for_character(self, character_name: str, new_appearance: AppearanceSegments, triggered_message_id: int) -> bool:
         updated = self.db.update_character_appearance(
@@ -768,20 +689,13 @@ You do not need to summarize your own summary.
             triggered_by_message_id=triggered_message_id
         )
         if updated:
-            logger.info(f"Character '{character_name}' updated appearance subfields: {new_appearance.dict()}")
+            logger.info(f"Character '{character_name}' appearance updated: {new_appearance.dict()}")
         return updated
 
     def get_all_visible_messages(self) -> List[Dict]:
-        """
-        Kept for UI calls that simply want all messages from the 'messages' table.
-        Does NOT reflect per-character visibility.
-        """
         visible_msgs = self.db.get_messages(self.session_id)
         return [m for m in visible_msgs if m["message_type"] in ("user","character","assistant","system")]
 
-    #
-    # Validation / Correction
-    #
     async def validate_and_possibly_correct_interaction(
         self,
         character_name: str,
@@ -802,8 +716,6 @@ You do not need to summarize your own summary.
 
         while True:
             iteration += 1
-            logger.debug(f"Validation iteration {iteration} for character '{character_name}'")
-
             validation_prompt = f"""You are checking if the following JSON interaction is valid according to the character's system prompt and dynamic prompt template.
 
 System Prompt (character rules, guidelines):
@@ -813,7 +725,7 @@ Dynamic Prompt (with relevant context):
 {dynamic_prompt}
 
 The user-generated interaction JSON to validate:
-{current_interaction.json()}
+{current_interaction.model_dump_json()}
 
 Please reply in valid JSON format with the following fields:
 {{
@@ -853,9 +765,6 @@ Only produce valid JSON with these two top-level keys: "is_valid" and "corrected
             )
 
             if not result:
-                logger.warning(f"Validation request returned no result for iteration {iteration}.")
-                if self.validation_loop_setting == -1:
-                    continue
                 if self.validation_loop_setting > 0 and iteration >= self.validation_loop_setting:
                     return None
                 continue
@@ -865,34 +774,139 @@ Only produce valid JSON with these two top-level keys: "is_valid" and "corrected
             else:
                 try:
                     validation_output = InteractionValidationOutput.parse_raw(result)
-                except Exception as parse_e:
-                    logger.warning(f"Failed to parse validation output: {parse_e}")
-                    if self.validation_loop_setting == -1:
-                        continue
+                except Exception:
                     if self.validation_loop_setting > 0 and iteration >= self.validation_loop_setting:
                         return None
                     continue
 
             if validation_output.is_valid.lower() == "yes":
-                logger.debug(f"Interaction is valid on iteration {iteration}.")
                 return current_interaction
 
             corrected = validation_output.corrected_interaction
             if not corrected:
-                logger.warning("Validation said 'no' but didn't provide a corrected_interaction.")
-                if self.validation_loop_setting == -1:
-                    continue
                 if self.validation_loop_setting > 0 and iteration >= self.validation_loop_setting:
                     return None
                 continue
 
             current_interaction = corrected
-
             if self.validation_loop_setting > 0 and iteration >= self.validation_loop_setting:
-                logger.warning("Reached validation iteration limit without achieving 'is_valid=yes'.")
                 return None
-        
-        return None
+
+    #
+    # NEW: check for repeated lines from the same character
+    #
+    async def check_and_regenerate_if_repetitive(
+        self,
+        character_name: str,
+        system_prompt: str,
+        dynamic_prompt: str,
+        interaction: Interaction
+    ) -> Optional[Interaction]:
+        """
+        We compare 'interaction.action' and 'interaction.dialogue' to the recent lines
+        from the same speaker. If similarity >= self.similarity_threshold, we
+        regenerate the interaction with an additional instruction to avoid repetition.
+        We do up to 2 additional tries before giving up.
+        """
+        # 1) Gather the last N lines from the same speaker
+        all_visible = self.db.get_visible_messages_for_character(self.session_id, character_name)
+        # Filter out only the messages from this speaker (character_name)
+        same_speaker_lines = [m for m in all_visible if m["sender"] == character_name]
+        # We only need a handful of recent lines, let's take 5 or so
+        recent_speaker_lines = same_speaker_lines[-5:] if len(same_speaker_lines) > 5 else same_speaker_lines
+
+        # 2) We'll embed the new action and dialogue, compare each with the recent lines
+        embed_client = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml')
+        tries = 0
+        max_tries = 2  # how many times we allow regeneration
+
+        current_interaction = interaction
+
+        while True:
+            # Check similarity for action
+            action_embedding = embed_client.get_embedding(current_interaction.action)
+            is_action_similar = False
+            # Check similarity for dialogue
+            dialogue_embedding = embed_client.get_embedding(current_interaction.dialogue)
+            is_dialogue_similar = False
+            actiondialogue_embedding = embed_client.get_embedding(current_interaction.action+' '+current_interaction.dialogue)
+            is_actiondialogue_similar = False
+
+            for line_obj in recent_speaker_lines:
+                old_msg = line_obj["message"]
+                # Because we store the action+dialogue in the same 'message', we might separate them,
+                # or just compare them in total. Let's do both approaches:
+                # 1) If the old message contained "*some action*\nsome dialogue", we can compare the lines separately.
+                # But for simplicity, compare with the entire message.
+                old_embedding = embed_client.get_embedding(old_msg)
+                if old_embedding:
+                    # Compare with action
+                    sim_action = embed_client.compute_cosine_similarity(action_embedding, old_embedding)
+                    if sim_action >= self.similarity_threshold:
+                        is_action_similar = True
+                    
+                    # Compare with dialogue
+                    sim_dialogue = embed_client.compute_cosine_similarity(dialogue_embedding, old_embedding)
+                    if sim_dialogue >= self.similarity_threshold:
+                        is_dialogue_similar = True
+                    
+                    # Compare with both
+                    sim_actiondialogue = embed_client.compute_cosine_similarity(actiondialogue_embedding, old_embedding)
+                    if sim_actiondialogue >= self.similarity_threshold:
+                        is_actiondialogue_similar = True
+
+            if not is_action_similar and not is_dialogue_similar and not is_actiondialogue_similar:
+                # Good to go
+                return current_interaction
+
+            tries += 1
+            if tries > max_tries:
+                logger.warning("Exceeded maximum repetition regeneration attempts.")
+                return None
+
+            # We need to regenerate the interaction with an additional instruction
+            repetition_warning = ""
+            if (is_action_similar and is_dialogue_similar) or is_actiondialogue_similar:
+                repetition_warning = "Your action AND dialogue are too similar to recent lines."
+            elif is_action_similar:
+                repetition_warning = "Your action is too similar to something you previously did."
+            else:
+                repetition_warning = "Your dialogue is too similar to something you previously said."
+
+            extra_instruction = f"""
+IMPORTANT: {repetition_warning}
+Please revise your next interaction so that it:
+- Is not repetitive or nearly identical to any of your recent lines.
+- Moves the story forward.
+- Reflects your character's motivations and context.
+- Avoid loops about the same topic without progression.
+"""
+
+            # Let's append the extra instruction to the dynamic_prompt
+            revised_prompt = dynamic_prompt + "\n\n" + extra_instruction
+
+            # Regenerate
+            regen_client = OllamaClient('src/multipersona_chat_app/config/llm_config.yaml', output_model=Interaction)
+            new_interaction = await asyncio.to_thread(
+                regen_client.generate,
+                prompt=revised_prompt,
+                system=system_prompt,
+                use_cache=False
+            )
+            if not new_interaction or not isinstance(new_interaction, Interaction):
+                logger.warning("No valid regeneration received; returning None.")
+                return None
+
+            # Validate again
+            revalidated = await self.validate_and_possibly_correct_interaction(
+                character_name, system_prompt, revised_prompt, new_interaction
+            )
+            if not revalidated:
+                logger.warning("Regenerated interaction not valid. Trying again if tries remain.")
+                current_interaction = new_interaction  # fallback
+                continue
+
+            current_interaction = revalidated
 
     #
     # Plan Updating
@@ -919,7 +933,7 @@ You are an expert assistant in crafting and refining long-term plans for narrati
 - If the plan or goal has changed, a short explanation of why should be stored in the field: "why_new_plan_goal".
 
 Your focus is to create plans that are logical, detailed, and aligned with the {character_name}’s circumstances.
-        """
+"""
 
         user_prompt = f"""
 **Character Name:** {character_name}
@@ -948,7 +962,7 @@ Your focus is to create plans that are logical, detailed, and aligned with the {
     - Modify the "steps" as needed by adding, removing, or updating them.
 - Also provide a short explanation why {character_name} changes his steps/plan/goal in "why_new_plan_goal".
 
-Output the updated plan strictly in JSON format following this structure:
+Update or confirm the plan if needed. Output strictly in JSON:
 
 {{
 "goal": "<string>",
@@ -980,9 +994,8 @@ If no changes are needed, simply repeat the existing plan in the same JSON forma
             new_steps = new_plan.steps
             new_why = new_plan.why_new_plan_goal.strip()
 
-            # If no reason but changed something, fill minimal reason
             if not new_why and ((new_goal != old_goal) or (new_steps != old_steps)):
-                new_why = "No specific reason was provided, but the plan was updated."
+                new_why = "Plan changed; no explanation provided."
 
             if (new_goal != old_goal) or (new_steps != old_steps) or (new_why != old_why):
                 change_explanation = self.build_plan_change_summary(old_goal, old_steps, new_goal, new_steps)
@@ -997,10 +1010,6 @@ If no changes are needed, simply repeat the existing plan in the same JSON forma
                     triggered_message_id,
                     change_explanation
                 )
-                logger.info(
-                    f"Plan updated for '{character_name}'. "
-                    f"New goal: {new_goal}, steps: {new_steps}. Reason: {new_why}"
-                )
             else:
                 self.db.save_character_plan_with_history(
                     self.session_id,
@@ -1011,12 +1020,9 @@ If no changes are needed, simply repeat the existing plan in the same JSON forma
                     triggered_message_id,
                     "No change in plan"
                 )
-                logger.info(f"Plan for '{character_name}' re-confirmed. No changes made.")
-
         except Exception as e:
             logger.error(
-                f"Failed to parse new plan data for '{character_name}'. "
-                f"Keeping old plan. Error: {e}"
+                f"Failed to parse new plan for '{character_name}'. Keeping old plan. Error: {e}"
             )
 
     def build_plan_change_summary(self, old_goal: str, old_steps: List[str], new_goal: str, new_steps: List[str]) -> str:

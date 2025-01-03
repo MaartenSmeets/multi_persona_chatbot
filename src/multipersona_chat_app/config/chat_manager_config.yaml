@@ -1,3 +1,4 @@
 summarization_threshold: 10
 recent_dialogue_lines: 3
 validation_loop: 0
+similarity_threshold: 0.8
