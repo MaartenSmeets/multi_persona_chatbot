@@ -659,7 +659,6 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
         except Exception as e:
             logger.error(f"Error generating introduction for {character_name}: {e}", exc_info=True)
 
-        await self.update_character_plan(character_name, triggered_message_id=None)
 
     def get_session_name(self) -> str:
         sessions = self.db.get_all_sessions()
@@ -875,11 +874,11 @@ Only produce valid JSON with these two top-level keys: "is_valid" and "corrected
 
             extra_instruction = f"""
 IMPORTANT: {repetition_warning}
-Please revise your next interaction so that it:
-- Is not repetitive or nearly identical to any of your recent lines.
-- Moves the story forward.
-- Reflects your character's motivations and context.
-- Avoid loops about the same topic without progression.
+The current suggestion for an interaction includes the action (`{current_interaction.action}`) and dialogue (`{current_interaction.dialogue}`). Please revise your next interaction so that it is clearly different from these in the following ways:
+- It should not be repetitive or nearly identical to any of your recent lines.
+- It must move the story forward.
+- It should reflect your character's motivations and context.
+- It must avoid loops about the same topic without progression.
 """
 
             # Let's append the extra instruction to the dynamic_prompt
