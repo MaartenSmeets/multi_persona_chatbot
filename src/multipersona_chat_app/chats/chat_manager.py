@@ -381,8 +381,8 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
     def get_latest_dialogue(self, character_name: str) -> str:
         """
         We gather the last few visible lines of conversation from the perspective
-        of `character_name`. The final line is tagged with "[Latest]" instead of
-        inserting something like 'Latest Dialogue Line:' into the user text.
+        of `character_name`. The final line is tagged with "[Latest]" to highlight it.
+        The speaker is clearly indicated for every line, ensuring clarity of who said what.
         """
         visible_history = self.get_visible_history_for_character(character_name)
         recent_msgs = visible_history[-self.recent_dialogue_lines:]
@@ -395,11 +395,11 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
                 line = f"You [Affect: {affect}, Purpose: {purpose}]: {msg['message']}"
             else:
                 line = f"{msg['sender']}: {msg['message']}"
-            # For the final line, mark it clearly but avoid polluting the actual user text
+
+            # For the final line, mark it clearly but retain the speaker's name
             if i == len(recent_msgs) - 1:
-                formatted_dialogue_lines.append(f"[Latest] {line}")
-            else:
-                formatted_dialogue_lines.append(line)
+                line = f"{line} [Latest]"
+            formatted_dialogue_lines.append(line)
 
         return "\n".join(formatted_dialogue_lines)
 
@@ -452,9 +452,11 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
         )
 
         visible_history = self.get_visible_history_for_character(character_name)
-        latest_text = visible_history[-1]['message'] if visible_history else ""
-        if latest_text:
-            latest_text = f"[Latest] {latest_text}"
+        if visible_history:
+            last_msg = visible_history[-1]
+            latest_text = f"{last_msg['sender']}: {last_msg['message']} [Latest]"
+        else:
+            latest_text = ""
 
         all_summaries = self.db.get_all_summaries(self.session_id, character_name)
         chat_history_summary = "\n\n".join(all_summaries) if all_summaries else ""
@@ -571,7 +573,8 @@ Now produce a short summary from {character_name}'s viewpoint, emphasizing why c
             )
             if not final_interaction:
                 logger.warning(f"Repetitive interaction could not be resolved for {character_name}.")
-                return
+                # We fall back to the validated interaction
+                final_interaction = validated
 
             final_interaction.action = utils.remove_markdown(final_interaction.action)
             final_interaction.dialogue = utils.remove_markdown(final_interaction.dialogue)
@@ -870,6 +873,8 @@ Only produce valid JSON with these two top-level keys: "is_valid" and "corrected
                 repetition_warning = "Your action is too similar to something you previously did."
             else:
                 repetition_warning = "Your dialogue is too similar to something you previously said."
+
+            logger.info(f"Similarity check not passed! Repetition detected: {repetition_warning}")
 
             extra_instruction = f"""
 IMPORTANT: {repetition_warning}
